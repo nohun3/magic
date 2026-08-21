@@ -10,10 +10,11 @@ Example:
 
     python -m pc.detector.test_click_text 오렌 여관
 
-Assumes the talking-scroll window (templates/roi_talking_scroll_window.png)
-is already open on screen -- this test only locates/reads/clicks within
-it, it doesn't open it. OCR is scoped to `talking_scroll_window.content_offset`
-(see settings.yaml) instead of the whole frame, which is both faster and
+Assumes a dialog (templates/roi_dialog.png -- the generic popup frame
+reused for talking-scroll/teleport-scroll lists, NPC dialogue, etc.) is
+already open on screen -- this test only locates/reads/clicks within it,
+it doesn't open it. OCR is scoped to `dialog.content_offset` (see
+settings.yaml) instead of the whole frame, which is both faster and
 avoids matching text in some unrelated part of the screen.
 
 All mouse movement/clicking goes through the Arduino (SerialLink), never
@@ -78,13 +79,13 @@ def main() -> None:
     scale_x = frame.shape[1] / logical_region.width
     scale_y = frame.shape[0] / logical_region.height
 
-    win_cfg = settings["talking_scroll_window"]
-    border = SkillPanelLocator(_PROJECT_ROOT / win_cfg["template"], win_cfg.get("match_threshold", 0.85))
-    content_locator = WindowContentLocator(border, ContentOffset(**win_cfg["content_offset"]))
+    dialog_cfg = settings["dialog"]
+    border = SkillPanelLocator(_PROJECT_ROOT / dialog_cfg["template"], dialog_cfg.get("match_threshold", 0.85))
+    content_locator = WindowContentLocator(border, ContentOffset(**dialog_cfg["content_offset"]))
 
     content_region = content_locator.content_region(frame)
     if content_region is None:
-        print("Talking-scroll window not found on screen -- is it open?")
+        print("Dialog not found on screen -- is it open?")
         sys.exit(1)
     crop = frame[
         content_region.top: content_region.top + content_region.height,

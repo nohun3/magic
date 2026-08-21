@@ -1,11 +1,12 @@
-"""Locates a UI element (the HP/MP bar) within a captured frame by
-template matching against a reference crop, instead of hardcoded pixel
-coordinates.
+"""Locates a UI element within a captured frame by template matching
+against a reference crop, instead of hardcoded pixel coordinates.
 
-The reference crops live in templates/hp_roi.png and templates/mp_roi.png.
-As long as the bar still looks the same, this finds it wherever it is in
-the frame -- so unlike a fixed pixel offset, it doesn't need to be
-recalibrated just because the window ended up in a different spot.
+Generic -- used by HP/MP's anchor (templates/roi_hpmp_anchor.png),
+skill_roi, buff_roi, icon presence checks, etc., not just one specific
+element. As long as the element still looks the same, this finds it
+wherever it is in the frame -- so unlike a fixed pixel offset, it
+doesn't need to be recalibrated just because the window ended up in a
+different spot.
 It does NOT handle the UI being a different *scale* (e.g. a very
 different window/resolution) -- that still needs a fresh template crop.
 """

@@ -3,7 +3,7 @@ dragon skull ornament between the two bars, which never changes
 regardless of HP/MP value -- and reading a fixed-offset region from it,
 instead of matching the whole bar image directly.
 
-hp_roi.png/mp_roi.png (the whole-bar images) turned out to be unusable
+roi_hp.png/roi_mp.png (the whole-bar images) turned out to be unusable
 as the *locating* template on their own: they were captured at 100%
 fill, and the match score against a partially-filled or near-empty bar
 drops enough (simulated as low as ~0.33 at 1% fill) to fail even a

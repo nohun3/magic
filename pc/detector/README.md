@@ -17,13 +17,13 @@ HP and MP are read by:
 
 ## Why an anchor instead of matching the bar directly
 
-Earlier versions matched `hp_roi.png`/`mp_roi.png` (whole-bar images)
+Earlier versions matched `roi_hp.png`/`roi_mp.png` (whole-bar images)
 directly. Two escalating problems showed up:
 
 - The pixel-color-fill heuristic (before OCR existed) misread MP's
   subtle fill/empty color contrast in practice.
 - Switching to OCR fixed reading the value, but **locating** the bar via
-  the whole-bar image was still broken: `hp_roi.png`/`mp_roi.png` were
+  the whole-bar image was still broken: `roi_hp.png`/`roi_mp.png` were
   captured at 100% HP/MP (fully filled), and the match score against a
   partially-filled or near-empty bar drops as the value moves away from
   full -- measured as low as ~0.55 at ordinary gameplay levels, and
@@ -77,7 +77,7 @@ window size, different game) or matching stops working:
    ```python
    from pc.detector.template_locator import locate_template
    anchor_m = locate_template(img, cv2.imread("templates/roi_hpmp_anchor.png"), 0.0)
-   hp_m = locate_template(img, cv2.imread("templates/hp_roi.png"), 0.0)
+   hp_m = locate_template(img, cv2.imread("templates/roi_hp.png"), 0.0)
    print(hp_m.region.left - anchor_m.region.left, hp_m.region.top - anchor_m.region.top,
          hp_m.region.width, hp_m.region.height)
    ```

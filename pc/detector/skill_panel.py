@@ -1,4 +1,4 @@
-"""Locates the skill/quick-slot panel (templates/skill_roi.png) once and
+"""Locates the skill/quick-slot panel (templates/roi_skill.png) once and
 caches it, so icon presence checks can be scoped to search only inside
 it instead of the whole captured frame -- faster (smaller area to
 matchTemplate against) and avoids any chance of a false match to

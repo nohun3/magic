@@ -33,7 +33,7 @@ capture:
 
 # HP/MP are detected via a shared anchor -- the dragon skull ornament
 # between the two bars, which never changes regardless of HP/MP value --
-# instead of matching the whole bar image directly. hp_roi.png/mp_roi.png
+# instead of matching the whole bar image directly. roi_hp.png/roi_mp.png
 # (captured at 100% fill) turned out to be unusable for *locating* the
 # bar: match score against a partially-filled or near-empty bar drops
 # low enough (simulated as low as ~0.33 at 1% fill) to fail even a
@@ -80,7 +80,7 @@ chat:
 # because the panel's own icons/toggles change, so it won't pixel-match
 # as tightly as a truly static image (same reasoning as chat's threshold).
 skill_roi:
-  template: templates/skill_roi.png
+  template: templates/roi_skill.png
   match_threshold: 0.7
 
 # Active-buff column (top-right of screen). Its content changes a lot
@@ -93,7 +93,7 @@ skill_roi:
 # skill_roi uses). match_threshold only needs to be low enough that the
 # one-time startup location attempt succeeds in a typical buff state.
 buff_roi:
-  template: templates/buff_roi.png
+  template: templates/roi_buff.png
   match_threshold: 0.35
 
 # Buff presence checks, scoped to buff_roi above -- same mechanism as
@@ -143,6 +143,9 @@ icons:
   meditation:
     template: templates/icon_meditation.png
     match_threshold: 0.85
+  heel:
+    template: templates/icon_heel.png
+    match_threshold: 0.85
 
 # HP/MP trigger conditions. Each fires its `key` when the matching gauge
 # is at or below `threshold_percent` -- but not more often than once per
@@ -178,20 +181,30 @@ sequences:
   - {type: WAIT, ms: 100}
   - {type: KEY, key: F2, hold_ms: 30}
 
-# "말하는 두루마리" (talking scroll) location-list popup. Its content
-# scrolls/changes (different list per drill-down), but the ornamental
-# top border + "Close" button never do -- template-matching just that
-# thin static strip locates the window reliably (see the whole-window
-# match score drop from 1.0 to 0.49 between two different lists, vs.
-# this strip staying at 0.94+). `content_offset` is the OCR-able content
-# area's position/size relative to the matched border's top-left corner,
-# so OCR only scans the actual list instead of a generously-oversized
-# guess -- this is what made pc.detector.test_click_text's OCR call
-# faster than the original ad hoc 750x620 crop.
-talking_scroll_window:
-  template: templates/roi_talking_scroll_window.png
+# Generic dialog window -- the same frame (top-left of screen) is reused
+# for many different popups: talking-scroll/teleport-scroll location
+# lists, and (per the user) NPC dialogue too. Only the frame position is
+# stable; the content inside changes per-dialog and while scrolling, so
+# -- same reasoning as skill_roi/buff_roi -- matching the whole window
+# image directly isn't reliable. It's worse than skill_roi/buff_roi,
+# too: even with visually-identical list content, whole-image matching
+# scored only ~0.30, because text edges are extremely sensitive to
+# sub-pixel rendering differences between captures (confirmed via a
+# pixel diff -- every letter's outline lit up despite the two images
+# looking the same to the eye). `template` here is therefore NOT the
+# full dialog capture (that's templates/roi_dialog.png, kept as a
+# reference/for re-measuring content_offset, but not used for matching)
+# -- it's just the "Close" button area, which is unique to the top
+# border (unlike the rest of the border's rope pattern, which is
+# ambiguous with the bottom border) and matched a consistent 0.94+
+# across repeated live captures. `content_offset` is the OCR-able
+# content area's position/size relative to the matched Close-button
+# region's top-left corner, sized to cover the entire dialog content
+# (not a conservative guess) per the user's request.
+dialog:
+  template: templates/roi_dialog_border.png
   match_threshold: 0.85
-  content_offset: {left: 5, top: 35, width: 437, height: 555}
+  content_offset: {left: -365, top: 35, width: 432, height: 535}
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have

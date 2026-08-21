@@ -42,9 +42,9 @@ for what was verified at each stage.
 3. **Configure `pc/config/settings.yaml`** -- see the comments in the
    file itself for what each section does. At minimum:
    - `capture.window_title`: a substring of your game window's title
-   - `hp.template` / `mp.template`: reference crops of your HP/MP bars
-     (see `templates/hp_roi.png` / `templates/mp_roi.png` for the
-     current examples, and [pc/detector/README.md](pc/detector/README.md)
+   - `hpmp_anchor.template` + `hp.content_offset` / `mp.content_offset`:
+     the HP/MP bar location (see `templates/roi_hpmp_anchor.png` for the
+     current example, and [pc/detector/README.md](pc/detector/README.md)
      for how to make your own if the UI theme/resolution differs)
    - `conditions.hp_low` / `conditions.mp_low`: thresholds, cooldowns,
      and which key each fires
@@ -125,6 +125,6 @@ next, per `CLAUDE.md`'s development rules:
   real condition and uses placeholder mouse coordinates (0, 0) -- add
   `sequence: hp_low_example` to a condition and fix the coordinates
   before relying on it.
-- The HP/MP detector templates (`templates/hp_roi.png`,
-  `templates/mp_roi.png`) are specific to the current game window size;
-  see `pc/detector/README.md` to recalibrate if that changes.
+- The HP/MP detector anchor (`templates/roi_hpmp_anchor.png`) is
+  specific to the current game window size; see `pc/detector/README.md`
+  to recalibrate if that changes.
