@@ -1,0 +1,206 @@
+# PC-side runtime configuration.
+#
+# Nothing in pc/capture, pc/detector, pc/condition, etc. should hardcode
+# values that belong here (ROI coordinates, thresholds, capture region...).
+# Edit this file (or swap in a different settings file) instead of editing code.
+
+capture:
+  # If set, capture the client area (no title bar/border) of the first
+  # visible window whose title contains this text (case-insensitive).
+  # The window's position/size can differ between runs -- it's located
+  # once when capture starts, so this works regardless of where the
+  # window ends up on screen. Takes priority over region/monitor below.
+  # Set to null to fall back to region/monitor capture instead.
+  window_title: "Lineage"
+
+  # mss monitor index, used only when window_title is null.
+  # 0 = all monitors combined into one virtual screen, 1 = primary
+  # monitor, 2 = second monitor, etc.
+  monitor: 1
+
+  # Optional fixed sub-region of the chosen monitor, in monitor-local
+  # pixel coordinates. Used only when window_title is null. Leave as
+  # `null` to capture the full monitor.
+  region:
+  # region:
+  #   left: 0
+  #   top: 0
+  #   width: 1280
+  #   height: 720
+
+  # Target capture rate for the live preview / main loop.
+  target_fps: 30
+
+# HP/MP are detected via a shared anchor -- the dragon skull ornament
+# between the two bars, which never changes regardless of HP/MP value --
+# instead of matching the whole bar image directly. hp_roi.png/mp_roi.png
+# (captured at 100% fill) turned out to be unusable for *locating* the
+# bar: match score against a partially-filled or near-empty bar drops
+# low enough (simulated as low as ~0.33 at 1% fill) to fail even a
+# generous threshold, exactly when a low-HP/MP reading matters most.
+# roi_hpmp_anchor.png's pixels never change no matter what HP/MP
+# currently is (measured 1.0 match score at every fill level tested), so
+# anchoring on it and reading each bar via a fixed offset is
+# fill-percentage-proof by construction. See pc/detector/README.md and
+# anchored_gauge_detector.py.
+#
+# match_threshold here only has to distinguish "the skull is on screen"
+# from "it isn't" -- 0.9 is comfortably strict since the anchor itself
+# is 100% static.
+hpmp_anchor:
+  template: templates/roi_hpmp_anchor.png
+  match_threshold: 0.9
+
+# hp/mp's OCR-able text region, as a fixed pixel offset from
+# hpmp_anchor's top-left corner (negative left = to the anchor's left,
+# i.e. HP; positive = to its right, i.e. MP). Measured directly from a
+# live frame -- see pc/detector/README.md if these ever need re-measuring.
+hp:
+  content_offset: {left: -350, top: 7, width: 429, height: 57}
+
+mp:
+  content_offset: {left: 25, top: 5, width: 400, height: 55}
+
+# Chat log area -- read to find the dungeon-entry remaining-time
+# message (see pc/detector/chat_reader.py). Unlike hp/mp/icons, the
+# chat log's actual text content keeps changing (scrolling messages),
+# so a template captured from one moment won't pixel-match a later
+# frame's different text anywhere near as tightly -- match_threshold is
+# deliberately much lower here because this template match is only
+# locating the panel's stable position/structure, not verifying its
+# (constantly changing) content.
+chat:
+  template: templates/roi_chatting.png
+  match_threshold: 0.5
+
+# Skill/quick-slot panel -- icon presence checks (below) are scoped to
+# search only inside this region instead of the whole captured frame.
+# Faster, and rules out a false match to something elsewhere on screen
+# that happens to look similar. Threshold is lower than icons/hp/mp
+# because the panel's own icons/toggles change, so it won't pixel-match
+# as tightly as a truly static image (same reasoning as chat's threshold).
+skill_roi:
+  template: templates/skill_roi.png
+  match_threshold: 0.7
+
+# Active-buff column (top-right of screen). Its content changes a lot
+# (whatever buffs happen to be active), so unlike hp/mp/skill_roi its
+# match score isn't reliable as an ongoing check -- measured as low as
+# 0.397 in one buff state and a "wrong location" scoring 0.385 in
+# another, uncomfortably close. It's only located ONCE, at startup
+# ("remembered"), and that cached position is trusted from then on
+# without re-verifying -- see skill_panel.py's locate() (same class
+# skill_roi uses). match_threshold only needs to be low enough that the
+# one-time startup location attempt succeeds in a typical buff state.
+buff_roi:
+  template: templates/buff_roi.png
+  match_threshold: 0.35
+
+# Buff presence checks, scoped to buff_roi above -- same mechanism as
+# icons (see below), just semantically "is this buff currently active"
+# instead of "is this item/toggle icon showing".
+buffs:
+  meditation:
+    template: templates/buff_meditation.png
+    match_threshold: 0.85
+
+# Icon presence checks: does a specific icon currently appear on
+# screen? Unlike hp/mp (always expected to be visible -- not finding
+# them is an error), an icon being absent is often a valid, meaningful
+# reading on its own (an item not in inventory, a buff not active,
+# a toggle that's off) -- see pc/detector/presence_detector.py.
+# Searched only within the skill_roi panel above, not the whole frame.
+icons:
+  hotel_return_icon:
+    templates:
+    - templates/icon_hotel_key.png
+    - templates/icon_hotel_key_active.png
+    match_threshold: 0.85
+  ats_off:
+    template: templates/icon_ats_off.png
+    match_threshold: 0.85
+  ats_on:
+    template: templates/icon_ats_on.png
+    match_threshold: 0.85
+  teleport:
+    template: templates/icon_teleport.png
+    match_threshold: 0.85
+  talking_scroll:
+    # The mouth animates open/closed, so this needs both animation
+    # frames x both click states (4 templates) rather than the 2 that
+    # cover a simple clicked/unclicked icon like hotel_return_icon.
+    templates:
+    - templates/icon_talking_scroll.png
+    - templates/icon_talking_scroll_active.png
+    - templates/icon_talking_scroll2.png
+    - templates/icon_talking_scroll2_active.png
+    match_threshold: 0.85
+  teleport_scroll:
+    templates:
+    - templates/icon_teleport_scroll.png
+    - templates/icon_teleport_scroll_active.png
+    match_threshold: 0.85
+  meditation:
+    template: templates/icon_meditation.png
+    match_threshold: 0.85
+
+# HP/MP trigger conditions. Each fires its `key` when the matching gauge
+# is at or below `threshold_percent` -- but not more often than once per
+# `cooldown_seconds`, even if the condition keeps holding true, so a
+# sustained low-HP/MP state doesn't spam the same key every poll.
+# HP and MP are independent: one being on cooldown never blocks the other.
+conditions:
+  hp_low:
+    threshold_percent: 10.0
+    cooldown_seconds: 600.0
+    key: F12
+  mp_low:
+    threshold_percent: 10.0
+    cooldown_seconds: 600.0
+    key: F12
+
+# Named action sequences: an ordered list of steps, run non-blocking
+# with the given waits between them. A condition (above) can trigger one
+# of these instead of a single key by adding `sequence: <name>` to it --
+# e.g. `hp_low: {..., sequence: hp_low_example}` would run this whole
+# sequence instead of just tapping `key`. Not turned on by default: the
+# example below mirrors the spec's own sample (HP low -> move, click,
+# then two key taps) but with placeholder mouse coordinates (0, 0) --
+# adjust x/y to real screen positions (and actually add `sequence: ...`
+# to a condition) before using it for real.
+sequences:
+  hp_low_example:
+  - {type: MOUSE_MOVE, x: 0, y: 0}
+  - {type: WAIT, ms: 30}
+  - {type: MOUSE_CLICK, button: LEFT, hold_ms: 30}
+  - {type: WAIT, ms: 50}
+  - {type: KEY, key: F1, hold_ms: 30}
+  - {type: WAIT, ms: 100}
+  - {type: KEY, key: F2, hold_ms: 30}
+
+# "말하는 두루마리" (talking scroll) location-list popup. Its content
+# scrolls/changes (different list per drill-down), but the ornamental
+# top border + "Close" button never do -- template-matching just that
+# thin static strip locates the window reliably (see the whole-window
+# match score drop from 1.0 to 0.49 between two different lists, vs.
+# this strip staying at 0.94+). `content_offset` is the OCR-able content
+# area's position/size relative to the matched border's top-left corner,
+# so OCR only scans the actual list instead of a generously-oversized
+# guess -- this is what made pc.detector.test_click_text's OCR call
+# faster than the original ad hoc 750x620 crop.
+talking_scroll_window:
+  template: templates/roi_talking_scroll_window.png
+  match_threshold: 0.85
+  content_offset: {left: 5, top: 35, width: 437, height: 555}
+
+# Serial link to the Arduino. `port` is Windows-specific (COMxx) and
+# changes on every upload/reset -- set it to "auto" (default) to have
+# pc/serial/port_finder.py find the board automatically by its USB
+# VID:PID (falls back to matching "Arduino" in the port description).
+# Set it to a specific port (e.g. "COM19") instead if auto-detect ever
+# picks the wrong device or can't find a clone board -- check Device
+# Manager, or run:
+#   python -c "import serial.tools.list_ports as lp; [print(p) for p in lp.comports()]"
+serial:
+  port: auto
+  baud_rate: 115200

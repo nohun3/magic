@@ -1,0 +1,17 @@
+# Python virtual environment (recreate with: python -m venv .venv && pip install -r pc/requirements.txt)
+.venv/
+__pycache__/
+*.pyc
+
+# Scratch/debug output -- screenshots and intermediate images generated
+# while developing/calibrating detectors, not source. Also frequently
+# contains live gameplay screenshots (character/guild names, chat text)
+# that shouldn't be published.
+output/
+
+# Arduino build artifacts (arduino-cli writes here when --build-path isn't given)
+arduino/**/build/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
