@@ -382,7 +382,7 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
 # missed the gate and just try again with a fresh frame (the monster
 # may have moved on by then). Retries deliberately do not move the
 # character because that changes the scene and can obstruct detection.
-GATE_CLICK_MAX_ATTEMPTS = 3
+GATE_CLICK_MAX_ATTEMPTS = 5
 GATE_RETRY_INTERVAL_S = 0.5
 
 # OCR text boxes are clicked at their exact center. NPC/object sprite

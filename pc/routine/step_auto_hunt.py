@@ -370,12 +370,14 @@ def _are_hp_mp_ready(hp_detector, mp_detector, window_title: str, screen_capture
 
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
                   hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
-                  screen_capture_cls) -> bool:
+                  screen_capture_cls, force_run: bool = False) -> bool:
     """Runs [2단계], first running [1단계] if icon_hotel_key isn't
     present in roi_skill (the 4-hour room rental can expire mid-loop, so
     this precondition is re-checked every time, not just once at
     startup) -- then waits for HP 100% and the configured MP readiness
-    percentage before returning.
+    percentage before returning. When force_run is True, the HP/MP
+    readiness shortcut is bypassed and the actual hotel movement in
+    [2단계] always runs.
     Shared by run()'s MP<=5% handoff below and
     pc/routine/run_all.py's initial entry point, so both go through
     the exact same "ensure the precondition, run [2단계], wait for full
@@ -403,7 +405,15 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
                 print("  [1단계] failed.")
                 return False
 
-        if not _are_hp_mp_ready(hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent):
+        if force_run:
+            print("  forced [2단계] recovery -- ignoring HP/MP readiness shortcut")
+            gauges_ready = False
+        else:
+            gauges_ready = _are_hp_mp_ready(
+                hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
+            )
+
+        if not gauges_ready:
             ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
             if not ok:
                 print("  [2단계] failed.")

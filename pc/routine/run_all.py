@@ -107,7 +107,7 @@ def main() -> None:
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, ScreenCapture,
+                        ok_button_text, ScreenCapture, force_run=True,
                     )
                     if not ok:
                         print(f"[stop] cycle {cycle}: emergency [2단계] failed.")
