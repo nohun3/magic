@@ -25,7 +25,9 @@ MEDITATION_RETRY_MIN_MP and clicks icon_meditation once more -- then
 checks the buff a *second* time. Confirmed live that this second check
 matters: the retry click can ACK fine (the Arduino did physically
 click) without the buff actually coming up in-game, so trusting the ACK
-alone was reporting false successes.
+alone was reporting false successes. A missing buff after that retry is
+logged as a warning but does not fail [2단계]; the caller continues to
+wait for the configured HP/MP readiness condition.
 
 Both icons live on the F2 quick-slot tab that `roi_skill`'s templates
 were captured against -- the skill bar has multiple tabs (F1/F2/F3), so
@@ -245,8 +247,11 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     if retry_buff_result.present:
         print("  [retry] meditation buff active -- ok")
         return True
-    print(f"  [retry] meditation buff still not active (score={retry_buff_result.match_score:.3f}) -- giving up")
-    return False
+    print(
+        f"  [retry] meditation buff still not active "
+        f"(score={retry_buff_result.match_score:.3f}) -- continuing without stopping"
+    )
+    return True
 
 
 def _ensure_haste(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,

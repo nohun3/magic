@@ -196,19 +196,6 @@ def measure_wasteland_location(content_locator: WindowContentLocator,
     return detector.measure(crop)
 
 
-def save_location_debug_crop(content_locator: WindowContentLocator, frame: np.ndarray,
-                             output_dir: Path, attempt: int) -> Optional[Path]:
-    crop = content_locator.crop_content(frame)
-    if crop is None or crop.size == 0:
-        return None
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp_ms = int(time.time() * 1000)
-    path = output_dir / f"location_verify_fail_{timestamp_ms}_{attempt:02d}.png"
-    if not cv2.imwrite(str(path), crop):
-        return None
-    return path
-
-
 def save_gate_preclick_frame(frame: np.ndarray, output_dir: Path, attempt: int,
                              gate_match: MatchResult) -> Optional[Path]:
     """Save the raw game-client frame immediately before a gate click.
@@ -225,6 +212,25 @@ def save_gate_preclick_frame(frame: np.ndarray, output_dir: Path, attempt: int,
         path = output_dir / (
             f"gate_preclick_{timestamp_ms}_attempt{attempt:02d}_"
             f"score{score:04d}_x{region.left}_y{region.top}.png"
+        )
+        if not cv2.imwrite(str(path), frame):
+            return None
+        return path
+    except (OSError, cv2.error):
+        return None
+
+
+def save_gate_failure_frame(frame: np.ndarray, output_dir: Path, attempt: int,
+                            best_match: MatchResult) -> Optional[Path]:
+    """Save the full game-client frame when no gate reaches threshold."""
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        region = best_match.region
+        score = int(round(best_match.score * 1000))
+        path = output_dir / (
+            f"gate_not_found_{timestamp_ms}_attempt{attempt:02d}_"
+            f"bestscore{score:04d}_x{region.left}_y{region.top}.png"
         )
         if not cv2.imwrite(str(path), frame):
             return None
@@ -523,8 +529,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             # retreat-and-retry applies here too.
             gate_cfg = settings["npcs"]["teleport_gate"]
             template = cv2.imread(str(project_root / gate_cfg["template"]))
-            best = locate_template(frame, template, 0.0)
+            best = locate_template(frame, template, -1.0)
             print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: no match >= threshold (best score below threshold: {best.score:.3f} @ {best.region})")
+            failure_path = save_gate_failure_frame(
+                frame, project_root / "output" / "gate_failures", attempt, best
+            )
+            if failure_path is not None:
+                print(f"    saved gate-failure game frame: {failure_path}")
+            else:
+                print("    [warn] failed to save gate-failure game frame")
         else:
             gate_cfg = settings["npcs"]["teleport_gate"]
             gate_template = cv2.imread(str(project_root / gate_cfg["template"]))
@@ -609,14 +622,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         if location_result.present:
             print("  location confirmed -- [3단계] complete")
             return True
-        debug_path = save_location_debug_crop(
-            location_content_locator, frame, project_root / "output", attempt
-        )
-        if debug_path is not None:
-            print(f"    saved failed location ROI: {debug_path}")
-        else:
-            print("    location anchor/ROI unavailable; no debug crop saved")
-
         # If the confirmation dialog is still visible, the previous HID
         # click did not take effect. Retry it once, then keep polling the
         # actual location until the timeout instead of assuming a fixed
