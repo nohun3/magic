@@ -44,9 +44,21 @@ class WindowContentLocator:
         border_region = self._border.locate(frame)
         if border_region is None:
             return None
+        # Clamp to the frame instead of letting left/top go negative --
+        # the border match can land a couple pixels off from run to run,
+        # and content_offset.left/top are sometimes calibrated close to
+        # 0 (e.g. dialog's -365 practically cancels the anchor's own
+        # left position). An unclamped negative left/top silently wraps
+        # around in a later frame[top:top+h, left:left+w] slice (Python
+        # negative indexing counts from the end of the array) instead of
+        # raising, producing an empty crop and a confusing downstream
+        # error (e.g. OCR's own resize dividing by a zero width) instead
+        # of a clear "off the edge of the frame" signal.
+        left = max(0, border_region.left + self._offset.left)
+        top = max(0, border_region.top + self._offset.top)
         return Region(
-            left=border_region.left + self._offset.left,
-            top=border_region.top + self._offset.top,
+            left=left,
+            top=top,
             width=self._offset.width,
             height=self._offset.height,
         )

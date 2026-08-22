@@ -1,0 +1,369 @@
+"""[2단계] 여관 이동.
+
+Three sub-actions, all plain quick-slot icon double-clicks (no dialog
+involved):
+
+1. `icons.hotel_key` -- a return-to-room item bound to a quick-slot
+   icon; double-clicking it teleports the character straight to the
+   rented hotel room. Followed by pressing ESC 3-5 times (per the
+   user's request) to clear out whatever transient dialog/prompt the
+   teleport itself might have left open.
+2. `icons.meditation` -- double-clicked right after arriving, to start
+   recovering.
+3. `icons.haste` -- right before handing off to [3단계] (per the user):
+   if `buffs.haste` isn't active in roi_buff, double-click icon_haste 6
+   times, 1 second apart (see _ensure_haste()). This is the end of
+   [2단계].
+
+The meditation double-click can silently fail to actually cast if MP is
+too low right after a hunt (per the user, meditation requires MP >= 10
+to cast at all) -- [2단계] always runs right after [4단계] exits at
+MP <= 5%, so this is a real, not theoretical, case. After clicking, `run()` checks
+`buffs.meditation` in `roi_buff` to confirm the buff actually came up;
+if not, it waits for MP to passively regen back up to
+MEDITATION_RETRY_MIN_MP and clicks icon_meditation once more -- then
+checks the buff a *second* time. Confirmed live that this second check
+matters: the retry click can ACK fine (the Arduino did physically
+click) without the buff actually coming up in-game, so trusting the ACK
+alone was reporting false successes.
+
+Both icons live on the F2 quick-slot tab that `roi_skill`'s templates
+were captured against -- the skill bar has multiple tabs (F1/F2/F3), so
+F2 is (re-)pressed before each of the two detections rather than once
+up front, in case the teleport itself resets the selected tab.
+
+Precondition for sub-action 1 (checked by the caller, not here):
+`icons.hotel_key` must already be present -- if it isn't, a room/key
+hasn't been bought yet and [1단계] (여관 열쇠 구입) needs to run first
+instead.
+
+All mouse movement/clicking goes through the Arduino (SerialLink), never
+a Python input-simulation call -- see CLAUDE.md.
+"""
+from __future__ import annotations
+
+import random
+import sys
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_PROJECT_ROOT))
+
+from pc.capture.screen_capture import Region  # noqa: E402
+from pc.detector.any_presence_detector import AnyPresenceDetector, build_icon_detector  # noqa: E402
+from pc.detector.presence_detector import PresenceResult  # noqa: E402
+from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
+from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
+from pc.serial.serial_link import SerialLink  # noqa: E402
+
+# How long to wait after pressing F2 before the tab swap has visibly
+# finished (icons re-render) -- generous but this step only runs
+# occasionally, not per-frame, so it doesn't need to be tight.
+TAB_SWITCH_SETTLE_S = 0.3
+
+# How long to wait after the hotel_key double-click before the teleport
+# fade/load has finished and it's safe to recapture -- longer than a
+# dialog opening (that's near-instant); a full scene teleport isn't.
+TELEPORT_SETTLE_S = 1.5
+
+# If the meditation buff didn't come up after the double-click, this is
+# the raw MP value (not percent) to wait for before retrying the cast
+# once -- per the user, meditation can only be cast at MP >= 10.
+MEDITATION_RETRY_MIN_MP = 10
+MP_POLL_INTERVAL_S = 1.0
+
+# After the hotel_key double-click, press ESC this many times (picked
+# fresh each call) -- per the user's request, to clear out whatever
+# transient dialog/prompt the teleport itself might have left open.
+ESC_PRESSES_MIN = 3
+ESC_PRESSES_MAX = 5
+
+
+def build_hotel_key_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["hotel_key"], project_root, panel=skill_panel)
+
+
+def build_meditation_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["meditation"], project_root, panel=skill_panel)
+
+
+def build_meditation_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["buffs"]["meditation"], project_root, panel=buff_panel)
+
+
+def build_buff_panel(settings: dict, project_root: Path) -> SkillPanelLocator:
+    buff_roi_cfg = settings["roi_buff"]
+    return SkillPanelLocator(project_root / buff_roi_cfg["template"], buff_roi_cfg["match_threshold"])
+
+
+def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["buffs"]["haste"], project_root, panel=buff_panel)
+
+
+def build_haste_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["haste"], project_root, panel=skill_panel)
+
+
+def ensure_skill_tab(link: SerialLink) -> bool:
+    """roi_skill's templates (hotel_key, meditation, ...) were captured
+    against the F2 quick-slot tab -- press F2 to make sure that tab is
+    showing before any roi_skill-scoped detection runs. Returns False if
+    the keypress wasn't ACKed."""
+    ack = link.send_and_wait("KEY", "F2")
+    if ack is None or not ack.ok:
+        return False
+    time.sleep(TAB_SWITCH_SETTLE_S)
+    return True
+
+
+def park_cursor(link: SerialLink, converter: FrameToMouseConverter) -> bool:
+    """Move the cursor to a neutral point in the open game world (clear
+    of hotbars/buff column/chat), so it doesn't sit on top of whatever
+    icon was just clicked. Otherwise the next capture can pick up that
+    icon's hover tooltip (e.g. meditation's "HP/MP 소모" readout) drawn
+    over the icon itself, which looks like a UI change and throws off
+    template matching -- see the conversation this was found in.
+    Returns True only if the move was ACKed OK."""
+    fx = converter.frame_width * 0.5
+    fy = converter.frame_height * 0.35
+    ux, uy = converter.convert(fx, fy)
+    ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
+    return ack is not None and ack.ok
+
+
+def double_click_region(link: SerialLink, converter: FrameToMouseConverter, region: Region) -> bool:
+    """Double-click a random point inside `region`, then park the cursor
+    away from it. Returns True only if the move and both clicks were
+    ACKed OK (parking failure doesn't fail the whole click -- the click
+    itself already succeeded by that point)."""
+    fx = region.left + random.uniform(region.width * 0.3, region.width * 0.7)
+    fy = region.top + random.uniform(region.height * 0.3, region.height * 0.7)
+    ux, uy = converter.convert(fx, fy)
+
+    move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
+    if move_ack is None or not move_ack.ok:
+        return False
+    time.sleep(0.15)
+    click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click1 is None or not click1.ok:
+        return False
+    time.sleep(0.12)
+    click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click2 is None or not click2.ok:
+        return False
+    time.sleep(0.1)
+    park_cursor(link, converter)
+    return True
+
+
+def locate_hotel_key(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
+    return build_hotel_key_detector(settings, project_root, skill_panel).measure(frame)
+
+
+def press_escape_keys(link: SerialLink) -> bool:
+    count = random.randint(ESC_PRESSES_MIN, ESC_PRESSES_MAX)
+    print(f"  pressing ESC x{count}...")
+    for i in range(count):
+        ack = link.send_and_wait("KEY", "ESC")
+        if ack is None or not ack.ok:
+            print(f"    ESC {i + 1}/{count} -> FAILED (missing ACK)")
+            return False
+        time.sleep(0.15)
+    print(f"    ESC x{count} -> ok")
+    return True
+
+
+def locate_meditation_icon(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
+    return build_meditation_icon_detector(settings, project_root, skill_panel).measure(frame)
+
+
+def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_capture_cls, poll_interval_s: float = MP_POLL_INTERVAL_S) -> None:
+    print(f"    MP >= {min_mp} 대기 중 (meditation 재시전용)...")
+    while True:
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        result = mp_detector.measure(frame)
+        if result is not None:
+            mp = result.reading
+            if mp.current >= min_mp:
+                print(f"    MP {mp.current}/{mp.maximum} -- 대기 종료")
+                return
+        time.sleep(poll_interval_s)
+
+
+def _verify_and_retry_meditation(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
+                                  mp_detector, window_title: str, screen_capture_cls) -> bool:
+    """Confirms the meditation double-click actually activated the buff
+    (checks `buffs.meditation` in roi_buff); if not, waits for MP to
+    passively regen to MEDITATION_RETRY_MIN_MP and clicks
+    icon_meditation once more. See module docstring for why this exists
+    -- the cast can silently fail when MP is very low, which is exactly
+    the state [2단계] always starts in right after [4단계]."""
+    buff_panel = build_buff_panel(settings, project_root)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
+    if buff_result.present:
+        print("  meditation buff active -- ok")
+        return True
+
+    print(f"  meditation buff not active after double-click (score={buff_result.match_score:.3f}) -- likely too little MP to cast")
+    _wait_for_mp_at_least(mp_detector, MEDITATION_RETRY_MIN_MP, window_title, screen_capture_cls)
+
+    if not ensure_skill_tab(link):
+        print("  [retry] F2 keypress not ACKed")
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
+    if not meditation.present or meditation.region is None:
+        print("  [retry] meditation icon not present")
+        return False
+    ok = double_click_region(link, converter, meditation.region)
+    print(f"  [retry] meditation double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+    if not ok:
+        return False
+
+    # An ACK only confirms the Arduino physically clicked -- not that
+    # the click actually landed on/activated the skill in-game (found
+    # live: the retry click ACKed fine but the buff still hadn't come
+    # up). Re-check the buff itself instead of trusting the ACK alone.
+    time.sleep(0.6)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    retry_buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
+    if retry_buff_result.present:
+        print("  [retry] meditation buff active -- ok")
+        return True
+    print(f"  [retry] meditation buff still not active (score={retry_buff_result.match_score:.3f}) -- giving up")
+    return False
+
+
+def _ensure_haste(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
+                   window_title: str, screen_capture_cls) -> bool:
+    """Before handing off to [3단계] (per the user): if `buffs.haste`
+    isn't active in roi_buff, double-click icon_haste 6 times, 1 second
+    apart. Unlike meditation, this doesn't re-check the buff between (or
+    after) the 6 clicks -- it just fires all 6 unconditionally once
+    triggered, per the user's spec."""
+    buff_panel = build_buff_panel(settings, project_root)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    buff_result = build_haste_buff_detector(settings, project_root, buff_panel).measure(frame)
+    if buff_result.present:
+        print("  haste buff active -- ok")
+        return True
+
+    print(f"  haste buff not active (score={buff_result.match_score:.3f}) -- double-clicking icon_haste x6, 1s apart")
+    if not ensure_skill_tab(link):
+        print("  [haste] F2 keypress not ACKed")
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    haste_icon = build_haste_icon_detector(settings, project_root, skill_panel).measure(frame)
+    if not haste_icon.present or haste_icon.region is None:
+        print(f"  [haste] icon not present (score={haste_icon.match_score:.3f})")
+        return False
+
+    for i in range(1, 7):
+        ok = double_click_region(link, converter, haste_icon.region)
+        print(f"  [haste] double-click {i}/6 -> {'ok' if ok else 'FAILED (missing ACK)'}")
+        if not ok:
+            return False
+        if i < 6:
+            time.sleep(1.0)
+    return True
+
+
+def _capture_and_convert(window_title: str, screen_capture_cls):
+    from pc.capture.window_locator import locate_window_region
+
+    with screen_capture_cls(window_title=window_title) as cap:
+        frame = cap.grab()
+    logical_region = locate_window_region(window_title)
+    converter = FrameToMouseConverter(logical_region, frame.shape)
+    return frame, converter
+
+
+def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
+        skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls) -> bool:
+    """Full step: hotel_key double-click (teleport to room), then
+    meditation double-click (start recovering), then verify the
+    meditation buff actually came up and retry once if not (see module
+    docstring). Returns False as soon as any sub-action fails to find
+    its icon or ACK."""
+    # -- sub-action 1: hotel_key --
+    if not ensure_skill_tab(link):
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
+    if not hotel_key.present or hotel_key.region is None:
+        return False
+    if not double_click_region(link, converter, hotel_key.region):
+        return False
+
+    if not press_escape_keys(link):
+        return False
+
+    time.sleep(TELEPORT_SETTLE_S)
+
+    # -- sub-action 2: meditation --
+    if not ensure_skill_tab(link):
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
+    if not meditation.present or meditation.region is None:
+        return False
+    if not double_click_region(link, converter, meditation.region):
+        return False
+
+    if not _verify_and_retry_meditation(settings, project_root, link, skill_panel, mp_detector, window_title, screen_capture_cls):
+        return False
+
+    # -- sub-action 3: haste, right before handing off to [3단계] --
+    return _ensure_haste(settings, project_root, link, skill_panel, window_title, screen_capture_cls)
+
+
+def main() -> None:
+    from pc.config.config_loader import load_settings
+    from pc.capture.screen_capture import ScreenCapture
+    from pc.capture.window_locator import WindowNotFoundError
+    from pc.serial.port_finder import resolve_port
+    from pc.detector.hpmp import build_hp_mp_detectors
+    from pc.detector.ocr_reader import GaugeTextReader
+
+    settings = load_settings()
+    window_title = settings["capture"]["window_title"]
+
+    roi_skill_cfg = settings["roi_skill"]
+    skill_panel = SkillPanelLocator(_PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+
+    print("Loading OCR model (HP/MP)...")
+    gauge_reader = GaugeTextReader()
+    _, mp_detector = build_hp_mp_detectors(settings, _PROJECT_ROOT, gauge_reader)
+
+    serial_cfg = settings["serial"]
+    try:
+        with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
+            time.sleep(2.5)  # Leonardo boot delay after port open
+            link.send("PING")
+            time.sleep(0.3)
+            link.poll_acks()
+
+            ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, mp_detector, ScreenCapture)
+            if not ok:
+                sys.exit(1)
+    except WindowNotFoundError as e:
+        print(f"[error] {e}")
+        sys.exit(1)
+
+    OUTPUT_DIR = _PROJECT_ROOT / "output"
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    with ScreenCapture(window_title=window_title) as cap:
+        after = cap.grab()
+    out_path = OUTPUT_DIR / "step_move_to_hotel_result.png"
+    cv2.imwrite(str(out_path), after)
+    print(f"Screenshot saved -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

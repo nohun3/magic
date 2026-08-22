@@ -30,9 +30,9 @@ class BuffMaintainer:
             buff_detector: a presence detector (see presence_detector.py /
                 any_presence_detector.py / scoped_icon_detector.py -- any
                 of them expose `.measure(frame) -> PresenceResult`) for
-                the buff icon, scoped to buff_roi.
+                the buff icon, scoped to roi_buff.
             skill_icon_detector: same shape, for the skill bar icon that
-                (re)activates the buff, scoped to skill_roi.
+                (re)activates the buff, scoped to roi_skill.
             cooldown_seconds: don't re-trigger more often than this, even
                 if the buff stays missing across many checks (e.g. while
                 its cast is on cooldown) -- avoids spamming clicks.

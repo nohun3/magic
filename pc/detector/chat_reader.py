@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 from paddleocr import PaddleOCR
@@ -89,14 +89,32 @@ class KoreanTextReader:
         return out
 
 
+def needles_match_fn(*needles: str) -> Callable[[str], bool]:
+    """Same whitespace-insensitive substring-containment test
+    find_text_region() uses, as a standalone predicate -- for callers
+    that need to run it against one line at a time instead of a whole
+    lines_with_boxes list (see pc/detector/remembered_text.py)."""
+    compact_needles = [re.sub(r"\s+", "", needle) for needle in needles]
+    return lambda text: all(needle in re.sub(r"\s+", "", text) for needle in compact_needles)
+
+
+def exact_match_fn(target: str) -> Callable[[str], bool]:
+    """Whitespace-insensitive *exact* match instead of substring
+    containment -- for text that has a sibling entry a substring search
+    would ambiguously also match (e.g. "버림받은 자들의 땅" vs "버림받은
+    자들의 땅: 심연", see step_move_to_wasteland.py)."""
+    compact_target = re.sub(r"\s+", "", target)
+    return lambda text: re.sub(r"\s+", "", text) == compact_target
+
+
 def find_text_region(lines_with_boxes: List[Tuple[str, Region]], *needles: str) -> Optional[Region]:
     """Return the bounding box of the first line containing every string
     in `needles` (e.g. find_text_region(lines, "오렌", "여관")), or None
     if no line matches. Whitespace in the OCR'd text is ignored so a
     stray/missing space doesn't break the match."""
+    match_fn = needles_match_fn(*needles)
     for text, region in lines_with_boxes:
-        compact = re.sub(r"\s+", "", text)
-        if all(re.sub(r"\s+", "", needle) in compact for needle in needles):
+        if match_fn(text):
             return region
     return None
 

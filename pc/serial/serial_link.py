@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -64,6 +65,28 @@ class SerialLink:
             except queue.Empty:
                 break
         return acks
+
+    def send_and_wait(self, command_type: str, args: str = "", timeout: float = 2.0) -> Optional[AckResponse]:
+        """Blocking convenience wrapper around send()/poll_acks() for
+        scripts that need to confirm one command finished before sending
+        the next (e.g. a routine step chaining MOUSE_MOVE -> MOUSE_CLICK).
+
+        Not used by the main pipeline (pc/queue/dispatcher.py) -- that
+        stays fire-and-forget on purpose, see its docstring. This is for
+        the synchronous, one-thing-at-a-time callers: test scripts and
+        pc/routine steps.
+
+        Returns None (not an exception) on timeout, so a caller can
+        decide for itself whether a missing ACK is fatal.
+        """
+        cmd_id = self.send(command_type, args)
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < timeout:
+            for ack in self.poll_acks():
+                if ack.command_id == cmd_id:
+                    return ack
+            time.sleep(0.01)
+        return None
 
     def close(self) -> None:
         self._stop_event.set()

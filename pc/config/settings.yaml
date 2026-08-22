@@ -47,12 +47,12 @@ capture:
 # match_threshold here only has to distinguish "the skull is on screen"
 # from "it isn't" -- 0.9 is comfortably strict since the anchor itself
 # is 100% static.
-hpmp_anchor:
+roi_hpmp_anchor:
   template: templates/roi_hpmp_anchor.png
   match_threshold: 0.9
 
 # hp/mp's OCR-able text region, as a fixed pixel offset from
-# hpmp_anchor's top-left corner (negative left = to the anchor's left,
+# roi_hpmp_anchor's top-left corner (negative left = to the anchor's left,
 # i.e. HP; positive = to its right, i.e. MP). Measured directly from a
 # live frame -- see pc/detector/README.md if these ever need re-measuring.
 hp:
@@ -76,42 +76,61 @@ chat:
 # Skill/quick-slot panel -- icon presence checks (below) are scoped to
 # search only inside this region instead of the whole captured frame.
 # Faster, and rules out a false match to something elsewhere on screen
-# that happens to look similar. Threshold is lower than icons/hp/mp
-# because the panel's own icons/toggles change, so it won't pixel-match
-# as tightly as a truly static image (same reasoning as chat's threshold).
-skill_roi:
+# that happens to look similar. Only located ONCE and cached from then
+# on (see skill_panel.py's locate()), same as roi_buff -- so, like
+# roi_buff, match_threshold only has to be low enough that the one-time
+# startup location attempt succeeds, not tight enough for an ongoing
+# per-frame check.
+#
+# Threshold dropped from an earlier 0.7 to 0.4 after several stackable
+# quick-slot items (mount-summon count, teleport scroll count) turned
+# out to render their remaining-count digits baked directly into the
+# icon, right inside this panel's captured area -- so as those counts
+# change during normal play, the whole-panel match score drifts with
+# them (measured as low as 0.44-0.49 live, well under the old 0.7)
+# even though the panel itself hasn't moved at all. Measured a 0.2+
+# safety margin at 0.4: true location scored 0.44-1.0 across several
+# live counts, a wrong location topped out at 0.285 on the same frame.
+# (Also cropped the worst-offending icon templates --
+# icon_teleport_scroll.png / icon_teleport_scroll_active.png -- to
+# exclude the count-digit corner entirely, so per-icon presence checks
+# aren't affected by this either.)
+roi_skill:
   template: templates/roi_skill.png
-  match_threshold: 0.7
+  match_threshold: 0.4
 
 # Active-buff column (top-right of screen). Its content changes a lot
-# (whatever buffs happen to be active), so unlike hp/mp/skill_roi its
+# (whatever buffs happen to be active), so unlike hp/mp/roi_skill its
 # match score isn't reliable as an ongoing check -- measured as low as
 # 0.397 in one buff state and a "wrong location" scoring 0.385 in
 # another, uncomfortably close. It's only located ONCE, at startup
 # ("remembered"), and that cached position is trusted from then on
 # without re-verifying -- see skill_panel.py's locate() (same class
-# skill_roi uses). match_threshold only needs to be low enough that the
+# roi_skill uses). match_threshold only needs to be low enough that the
 # one-time startup location attempt succeeds in a typical buff state.
-buff_roi:
+roi_buff:
   template: templates/roi_buff.png
   match_threshold: 0.35
 
-# Buff presence checks, scoped to buff_roi above -- same mechanism as
+# Buff presence checks, scoped to roi_buff above -- same mechanism as
 # icons (see below), just semantically "is this buff currently active"
 # instead of "is this item/toggle icon showing".
 buffs:
   meditation:
     template: templates/buff_meditation.png
     match_threshold: 0.85
+  haste:
+    template: templates/buff_haste.png
+    match_threshold: 0.85  # placeholder, same default as the other buffs -- not yet live-calibrated
 
 # Icon presence checks: does a specific icon currently appear on
 # screen? Unlike hp/mp (always expected to be visible -- not finding
 # them is an error), an icon being absent is often a valid, meaningful
 # reading on its own (an item not in inventory, a buff not active,
 # a toggle that's off) -- see pc/detector/presence_detector.py.
-# Searched only within the skill_roi panel above, not the whole frame.
+# Searched only within the roi_skill panel above, not the whole frame.
 icons:
-  hotel_return_icon:
+  hotel_key:
     templates:
     - templates/icon_hotel_key.png
     - templates/icon_hotel_key_active.png
@@ -128,7 +147,7 @@ icons:
   talking_scroll:
     # The mouth animates open/closed, so this needs both animation
     # frames x both click states (4 templates) rather than the 2 that
-    # cover a simple clicked/unclicked icon like hotel_return_icon.
+    # cover a simple clicked/unclicked icon like hotel_key.
     templates:
     - templates/icon_talking_scroll.png
     - templates/icon_talking_scroll_active.png
@@ -146,6 +165,54 @@ icons:
   heel:
     template: templates/icon_heel.png
     match_threshold: 0.85
+  haste:
+    template: templates/icon_haste.png
+    match_threshold: 0.85  # placeholder, same default as the other icons -- not yet live-calibrated
+
+# World-space NPC/object sprites -- unlike icons (fixed UI position,
+# always searched scoped to roi_skill), these render in the game world
+# itself at whatever position the camera/character happen to be, so
+# they're plain unscoped template matches over the whole frame (see
+# pc/routine -- built for [1단계]/[3단계]'s "click the thing that looks
+# like this" steps). Unlike text labels floating over an NPC's head,
+# clicking the label doesn't reliably trigger interaction -- the sprite
+# itself has to be clicked (confirmed live: clicking the "엔케" NPC's
+# name-tag text only walked the character over without opening dialogue,
+# clicking the sprite opened it immediately) -- so these exist
+# specifically for that, not as a replacement for OCR-based text finding
+# (pc/detector/chat_reader.py) which is still used for menu text.
+npcs:
+  hotel_manager:
+    template: templates/npc_hotel_manager.png
+    # Measured 0.907-1.0 across several independent live frames (same
+    # window, different camera/dialog states) during [1단계] development.
+    match_threshold: 0.85
+  teleport_gate:
+    template: templates/npc_teleport_gate.png
+    # The gate sometimes renders in a fainter/translucent state (unclear
+    # exactly when -- possibly after it's already been used once) where
+    # match score drops well below the 0.85 a freshly-rendered gate
+    # scores. Measured true-location vs. a wrong-location score on two
+    # independent live frames of the faint state: 0.427/0.304 (margin
+    # 0.123) and 0.387/0.271 (margin 0.116) -- consistent enough to set
+    # a threshold safely between the two clusters rather than the
+    # fully-rendered 0.85.
+    match_threshold: 0.35
+
+# Current location name (e.g. "오렌 마을", "버림받은 자들의 땅"), shown
+# top-left of the character-stat panel -- only visible outdoors (indoors/
+# in the hotel room, nothing renders there). The text itself changes with
+# location, so -- same anchor+offset reasoning as hpmp_anchor/dialog --
+# `template` is NOT the text but a small, unique, never-changing nearby
+# landmark: the first stat-category icon (the circular frame right under
+# the LEV bar). Measured a 1.0 (true location) vs 0.509 (a different
+# stat icon on the same panel -- they share the same circular border
+# style) margin across 3 independent live frames (2 indoor, 1 outdoor
+# mid-combat), so 0.75 sits comfortably in between.
+location:
+  template: templates/roi_location_anchor.png
+  match_threshold: 0.75
+  content_offset: {left: -8, top: -92, width: 300, height: 40}
 
 # HP/MP trigger conditions. Each fires its `key` when the matching gauge
 # is at or below `threshold_percent` -- but not more often than once per
@@ -185,8 +252,8 @@ sequences:
 # for many different popups: talking-scroll/teleport-scroll location
 # lists, and (per the user) NPC dialogue too. Only the frame position is
 # stable; the content inside changes per-dialog and while scrolling, so
-# -- same reasoning as skill_roi/buff_roi -- matching the whole window
-# image directly isn't reliable. It's worse than skill_roi/buff_roi,
+# -- same reasoning as roi_skill/roi_buff -- matching the whole window
+# image directly isn't reliable. It's worse than roi_skill/roi_buff,
 # too: even with visually-identical list content, whole-image matching
 # scored only ~0.30, because text edges are extremely sensitive to
 # sub-pixel rendering differences between captures (confirmed via a
@@ -196,14 +263,28 @@ sequences:
 # reference/for re-measuring content_offset, but not used for matching)
 # -- it's just the "Close" button area, which is unique to the top
 # border (unlike the rest of the border's rope pattern, which is
-# ambiguous with the bottom border) and matched a consistent 0.94+
-# across repeated live captures. `content_offset` is the OCR-able
-# content area's position/size relative to the matched Close-button
-# region's top-left corner, sized to cover the entire dialog content
-# (not a conservative guess) per the user's request.
+# ambiguous with the bottom border).
+#
+# This crop is taken from templates/roi_dialog.png itself (img[2:26,
+# 369:439] -- tight around the gold border + "Close" text, minimal flat
+# background margin) rather than from a live capture. An earlier looser
+# crop of the same button (more surrounding black margin) scored 0.735
+# true-location vs. 0.696 for a wrong location on a live frame -- a razor
+# -thin, unsafe margin. Tracked that down to TM_CCOEFF_NORMED itself:
+# normalized correlation gets numerically unstable over a near-flat,
+# low-texture patch (the wrong-location match was plain dark background,
+# mean brightness 42/255, std 13), so a crop that's mostly empty margin
+# is fragile no matter what it's cropped from. Trimming the margin so
+# the crop is mostly gold border + text fixed it: 0.857-1.0 true-location
+# vs. 0.684 wrong-location across two independent live frames -- a much
+# safer margin. match_threshold sits between those.
+# `content_offset` is the OCR-able content area's position/size relative
+# to the matched Close-button region's top-left corner, sized to cover
+# the entire dialog content (not a conservative guess) per the user's
+# request.
 dialog:
   template: templates/roi_dialog_border.png
-  match_threshold: 0.85
+  match_threshold: 0.75
   content_offset: {left: -365, top: 35, width: 432, height: 535}
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and

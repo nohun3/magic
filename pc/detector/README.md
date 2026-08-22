@@ -94,7 +94,7 @@ window size, different game) or matching stops working:
 
 ## Notes
 
-- `hpmp_anchor.match_threshold` (0.9) only has to distinguish "the
+- `roi_hpmp_anchor.match_threshold` (0.9) only has to distinguish "the
   skull is on screen" from "it isn't" — comfortably strict since the
   anchor itself is 100% static, unlike hp/mp's old per-bar thresholds.
 - OCR is comparatively slow (hundreds of ms per call) — much slower than

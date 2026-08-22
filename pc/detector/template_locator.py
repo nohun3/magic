@@ -2,7 +2,7 @@
 against a reference crop, instead of hardcoded pixel coordinates.
 
 Generic -- used by HP/MP's anchor (templates/roi_hpmp_anchor.png),
-skill_roi, buff_roi, icon presence checks, etc., not just one specific
+roi_skill, roi_buff, icon presence checks, etc., not just one specific
 element. As long as the element still looks the same, this finds it
 wherever it is in the frame -- so unlike a fixed pixel offset, it
 doesn't need to be recalibrated just because the window ended up in a

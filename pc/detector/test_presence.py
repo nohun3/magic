@@ -6,7 +6,7 @@ Usage (run from the project root, with the venv active):
     python -m pc.detector.test_presence live <icon_name>      # continuous checks, 'q' to quit
 
 <icon_name> must match a key under `icons:` in pc/config/settings.yaml
-(e.g. "hotel_return_icon"). Defaults to "hotel_return_icon" if omitted.
+(e.g. "hotel_key"). Defaults to "hotel_key" if omitted.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _build_capture(settings: dict) -> ScreenCapture:
 
 
 def _build_panel(settings: dict) -> SkillPanelLocator:
-    panel_cfg = settings["skill_roi"]
+    panel_cfg = settings["roi_skill"]
     return SkillPanelLocator(_PROJECT_ROOT / panel_cfg["template"], panel_cfg.get("match_threshold", 0.7))
 
 
@@ -103,7 +103,7 @@ def live_check(icon_name: str) -> None:
 
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "single"
-    icon_name = sys.argv[2] if len(sys.argv) > 2 else "hotel_return_icon"
+    icon_name = sys.argv[2] if len(sys.argv) > 2 else "hotel_key"
     try:
         if mode == "single":
             single_check(icon_name)

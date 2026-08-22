@@ -42,7 +42,7 @@ for what was verified at each stage.
 3. **Configure `pc/config/settings.yaml`** -- see the comments in the
    file itself for what each section does. At minimum:
    - `capture.window_title`: a substring of your game window's title
-   - `hpmp_anchor.template` + `hp.content_offset` / `mp.content_offset`:
+   - `roi_hpmp_anchor.template` + `hp.content_offset` / `mp.content_offset`:
      the HP/MP bar location (see `templates/roi_hpmp_anchor.png` for the
      current example, and [pc/detector/README.md](pc/detector/README.md)
      for how to make your own if the UI theme/resolution differs)

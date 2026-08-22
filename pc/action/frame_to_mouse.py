@@ -21,6 +21,8 @@ from pc.capture.screen_capture import Region
 
 class FrameToMouseConverter:
     def __init__(self, logical_window_region: Region, frame_shape: Tuple[int, int, int]):
+        self.frame_width = frame_shape[1]
+        self.frame_height = frame_shape[0]
         self.scale_x = frame_shape[1] / logical_window_region.width
         self.scale_y = frame_shape[0] / logical_window_region.height
         self._window = logical_window_region

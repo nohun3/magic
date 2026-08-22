@@ -1,6 +1,6 @@
 """Detects presence via any of several template variants of the same
 icon -- e.g. an item icon that renders differently depending on
-context/state (like hotel_return_icon looking different in the
+context/state (like hotel_key looking different in the
 inventory grid vs. the quick-slot bar, or before/after being clicked).
 "Present" if ANY variant currently matches.
 

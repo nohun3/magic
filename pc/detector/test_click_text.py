@@ -84,13 +84,10 @@ def main() -> None:
     content_locator = WindowContentLocator(border, ContentOffset(**dialog_cfg["content_offset"]))
 
     content_region = content_locator.content_region(frame)
-    if content_region is None:
+    crop = content_locator.crop_content(frame)
+    if content_region is None or crop is None:
         print("Dialog not found on screen -- is it open?")
         sys.exit(1)
-    crop = frame[
-        content_region.top: content_region.top + content_region.height,
-        content_region.left: content_region.left + content_region.width,
-    ]
     print(f"Content region (frame px): {content_region} ({crop.shape[1]}x{crop.shape[0]}, "
           f"was a fixed 750x620 guess before -- {750 * 620 / (crop.shape[0] * crop.shape[1]):.1f}x less area)")
 

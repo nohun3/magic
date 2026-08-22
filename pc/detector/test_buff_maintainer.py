@@ -5,7 +5,7 @@ Usage (run from the project root, with the venv active):
 
     python -m pc.detector.test_buff_maintainer
 
-buff_roi is located once at startup and that position is trusted from
+roi_buff is located once at startup and that position is trusted from
 then on ("remembered", per skill_panel.py's caching) rather than
 re-verified every check -- its content changes too much (whichever
 buffs are active) for an ongoing per-check match to be reliable, see
@@ -64,18 +64,18 @@ def main() -> None:
         print(f"[error] {e}")
         sys.exit(1)
 
-    print("Locating buff_roi (remembered for the rest of this run)...")
-    buff_roi_cfg = settings["buff_roi"]
-    buff_panel = SkillPanelLocator(_PROJECT_ROOT / buff_roi_cfg["template"], buff_roi_cfg["match_threshold"])
+    print("Locating roi_buff (remembered for the rest of this run)...")
+    roi_buff_cfg = settings["roi_buff"]
+    buff_panel = SkillPanelLocator(_PROJECT_ROOT / roi_buff_cfg["template"], roi_buff_cfg["match_threshold"])
     buff_panel_region = buff_panel.locate(frame)
     if buff_panel_region is None:
-        print("[error] could not locate buff_roi at all -- is the game window in a normal state?")
+        print("[error] could not locate roi_buff at all -- is the game window in a normal state?")
         sys.exit(1)
-    print(f"  buff_roi @ {buff_panel_region}")
+    print(f"  roi_buff @ {buff_panel_region}")
 
     meditation_buff_detector = build_icon_detector(settings["buffs"]["meditation"], _PROJECT_ROOT, panel=buff_panel)
 
-    skill_panel = SkillPanelLocator(_PROJECT_ROOT / settings["skill_roi"]["template"], settings["skill_roi"]["match_threshold"])
+    skill_panel = SkillPanelLocator(_PROJECT_ROOT / settings["roi_skill"]["template"], settings["roi_skill"]["match_threshold"])
     meditation_icon_detector = build_icon_detector(settings["icons"]["meditation"], _PROJECT_ROOT, panel=skill_panel)
 
     maintainer = BuffMaintainer(meditation_buff_detector, meditation_icon_detector, cooldown_seconds=5.0)
