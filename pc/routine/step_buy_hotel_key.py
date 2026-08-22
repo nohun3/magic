@@ -73,6 +73,22 @@ RENT_ROOM_NEEDLES = ("방을", "대여한다")
 OK_NEEDLES = ("OK",)
 
 
+def _select_rent_room(lines):
+    """Select the room-rental row even when OCR splits ``방을``.
+
+    On the live dialog PaddleOCR has been observed to return the first
+    row as two boxes, ``바`` and ``을대여한다``.  Requiring both original
+    needles in one box therefore misses text that is visibly present.
+    The adjacent hall-rental row is excluded explicitly so its otherwise
+    identical ``대여한다`` suffix cannot be clicked by mistake.
+    """
+    for text, box in lines:
+        compact = "".join(text.split())
+        if "대여한다" in compact and "홀" not in compact:
+            return box
+    return None
+
+
 def _build_dialog_content_locator(settings: dict, project_root: Path) -> WindowContentLocator:
     dialog_cfg = settings["dialog"]
     border = SkillPanelLocator(project_root / dialog_cfg["template"], dialog_cfg.get("match_threshold", 0.85))
@@ -91,7 +107,12 @@ def build_rent_room_text_locator(settings: dict, project_root: Path, reader: Kor
     # Yellow-masked before OCR -- "방을 대여한다" renders in yellow in
     # this NPC-menu dialog, same reasoning as build_hotel_text_locator()
     # above.
-    return RememberedDialogText(_build_dialog_content_locator(settings, project_root), reader, first_matching(needles_match_fn(*RENT_ROOM_NEEDLES)), preprocess=mask_non_yellow)
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        _select_rent_room,
+        preprocess=mask_non_yellow,
+    )
 
 
 def build_ok_button_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
