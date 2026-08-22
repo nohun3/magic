@@ -1,6 +1,6 @@
 """[2단계] 여관 이동.
 
-Three sub-actions, all plain quick-slot icon double-clicks (no dialog
+Two sub-actions, both plain quick-slot icon double-clicks (no dialog
 involved):
 
 1. `icons.hotel_key` -- a return-to-room item bound to a quick-slot
@@ -10,10 +10,6 @@ involved):
    teleport itself might have left open.
 2. `icons.meditation` -- double-clicked right after arriving, to start
    recovering.
-3. `icons.haste` -- right before handing off to [3단계] (per the user):
-   if `buffs.haste` isn't active in roi_buff, double-click icon_haste 6
-   times, 1 second apart (see _ensure_haste()). This is the end of
-   [2단계].
 
 The meditation double-click can silently fail to actually cast if MP is
 too low right after a hunt (per the user, meditation requires MP >= 10
@@ -77,9 +73,6 @@ TELEPORT_SETTLE_S = 1.5
 # once -- per the user, meditation can only be cast at MP >= 10.
 MEDITATION_RETRY_MIN_MP = 10
 MP_POLL_INTERVAL_S = 1.0
-HASTE_KEY = "F6"
-HASTE_KEY_PRESSES = 2
-HASTE_KEY_INTERVAL_S = 1.0
 
 
 # After the hotel_key double-click, press ESC this many times (picked
@@ -101,17 +94,17 @@ def build_meditation_buff_detector(settings: dict, project_root: Path, buff_pane
     return build_icon_detector(settings["buffs"]["meditation"], project_root, panel=buff_panel)
 
 
+def build_mana_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["buffs"]["mana"], project_root, panel=buff_panel)
+
+
+def build_mana_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["mana"], project_root, panel=skill_panel)
+
+
 def build_buff_panel(settings: dict, project_root: Path) -> SkillPanelLocator:
     buff_roi_cfg = settings["roi_buff"]
     return SkillPanelLocator(project_root / buff_roi_cfg["template"], buff_roi_cfg["match_threshold"])
-
-
-def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["buffs"]["haste"], project_root, panel=buff_panel)
-
-
-def build_haste_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["haste"], project_root, panel=skill_panel)
 
 
 def is_meditation_buff_active(settings: dict, project_root: Path, frame: np.ndarray) -> PresenceResult:
@@ -254,33 +247,30 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     return True
 
 
-def _ensure_haste(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
-                   window_title: str, screen_capture_cls) -> str:
-    """Return ``active``, ``clicked``, or ``failed``.
-
-    If `buffs.haste` is absent in roi_buff, press F6 twice, one second
-    apart. MP, rather than the buff icon, is checked by
-    ensure_step2() after those clicks to decide whether [2단계] must run
-    once more.
-    """
+def ensure_mana(settings: dict, project_root: Path, link: SerialLink,
+                skill_panel: SkillPanelLocator, window_title: str,
+                screen_capture_cls) -> None:
+    """Activate mana buff when absent; absence/failure is non-fatal."""
     buff_panel = build_buff_panel(settings, project_root)
     frame, _ = _capture_and_convert(window_title, screen_capture_cls)
-    buff_result = build_haste_buff_detector(settings, project_root, buff_panel).measure(frame)
-    if buff_result.present:
-        print("  haste buff active -- ok")
-        return "active"
+    mana_buff = build_mana_buff_detector(settings, project_root, buff_panel).measure(frame)
+    if mana_buff.present:
+        print("  mana buff active -- ok")
+        return
 
-    print(f"  haste buff not active (score={buff_result.match_score:.3f}) -- pressing {HASTE_KEY} x{HASTE_KEY_PRESSES}, 1s apart")
-    for i in range(1, HASTE_KEY_PRESSES + 1):
-        ack = link.send_and_wait("KEY", HASTE_KEY)
-        ok = ack is not None and ack.ok
-        print(f"  [haste] {HASTE_KEY} keypress {i}/{HASTE_KEY_PRESSES} -> {'ok' if ok else 'FAILED (missing ACK)'}")
-        if not ok:
-            return "failed"
-        if i < HASTE_KEY_PRESSES:
-            time.sleep(HASTE_KEY_INTERVAL_S)
+    print(f"  mana buff not active (score={mana_buff.match_score:.3f}) -- looking for icon_mana")
+    if not ensure_skill_tab(link):
+        print("  [mana warn] F2 keypress not ACKed -- continuing to [3단계]")
+        return
 
-    return "clicked"
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    mana_icon = build_mana_icon_detector(settings, project_root, skill_panel).measure(frame)
+    if not mana_icon.present or mana_icon.region is None:
+        print(f"  [mana warn] icon_mana not present (score={mana_icon.match_score:.3f}) -- continuing to [3단계]")
+        return
+
+    ok = double_click_region(link, converter, mana_icon.region)
+    print(f"  [mana] double-click -> {'ok' if ok else 'FAILED (continuing to [3단계])'}")
 
 
 def _capture_and_convert(window_title: str, screen_capture_cls):

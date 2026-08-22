@@ -126,6 +126,9 @@ buffs:
   haste:
     template: templates/buff_haste.png
     match_threshold: 0.85  # placeholder, same default as the other buffs -- not yet live-calibrated
+  mana:
+    template: templates/buff_mana.png
+    match_threshold: 0.85
 
 # Icon presence checks: does a specific icon currently appear on
 # screen? Unlike hp/mp (always expected to be visible -- not finding
@@ -172,6 +175,9 @@ icons:
   haste:
     template: templates/icon_haste.png
     match_threshold: 0.85  # placeholder, same default as the other icons -- not yet live-calibrated
+  mana:
+    template: templates/icon_mana.png
+    match_threshold: 0.85
 
 # World-space NPC/object sprites -- unlike icons (fixed UI position,
 # always searched scoped to roi_skill), these render in the game world

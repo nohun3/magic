@@ -27,7 +27,7 @@ dialog(대화창 목록 / NPC 대화 / 확인 프롬프트)라서, RememberedDia
 2번("[오렌] 여관")과 4번("방을 대여한다")은 노란색 텍스트라서 OCR 전에
 pc/detector/color_mask.py의 mask_non_yellow()로 노란색만 남기고 마스킹한다 --
 step_move_to_wasteland.py의 게이트 이후 대화창들과 같은 이유로 훨씬 빠르다. 5번
-("OK")은 흰색 버튼 라벨이라 마스킹 대상이 아니다.
+("OK")은 검은색 버튼 라벨이라 노란색 마스킹 대상이 아니다.
 
 All mouse movement/clicking goes through the Arduino (SerialLink), never
 a Python input-simulation call -- see CLAUDE.md.
@@ -116,7 +116,14 @@ def build_rent_room_text_locator(settings: dict, project_root: Path, reader: Kor
 
 
 def build_ok_button_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
-    return RememberedDialogText(_build_dialog_content_locator(settings, project_root), reader, first_matching(needles_match_fn(*OK_NEEDLES)))
+    # The OK label is black, not yellow. Keep the original dialog crop
+    # for OCR and explicitly avoid mask_non_yellow().
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        first_matching(needles_match_fn(*OK_NEEDLES)),
+        preprocess=None,
+    )
 
 
 def build_talking_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:

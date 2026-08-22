@@ -2,11 +2,8 @@
 
 [3단계](step_move_to_wasteland.py) 완료 후 실행한다.
 
-1. roi_skill에서 icon_teleport를 먼저 한 번 더블클릭 (ATS 켜기 전에 위치를
-   재조정 -- [3단계]가 도착한 지점 근처 상황과 무관하게 사냥을 새 위치에서
-   시작하기 위함).
-2. icon_ats_off를 더블클릭 -> icon_ats_on 상태로 토글.
-3. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
+1. icon_ats_off를 더블클릭 -> icon_ats_on 상태로 토글.
+2. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
    - HP <= 70%가 2틱 연속 확인되면 F9 키를 두 번 입력하고, HP가 70%를
      초과할 때까지 매 감시 주기마다 반복한다.
    - HP <= 50% 이면 icon_teleport 더블클릭 -> F9 키 두 번 입력 (위기 대응: 일단
@@ -91,7 +88,6 @@ MP_EXIT_CONSECUTIVE_TICKS = 2
 # while still avoiding a false skip from one bad frame.
 MP_FULL_SKIP_CONSECUTIVE_READS = 2
 MP_FULL_SKIP_CONFIRM_INTERVAL_S = 0.2
-HASTE_STEP2_MAX_RESTARTS = 1
 
 # MP naturally holds steady/ticks sideways by a point or two between
 # reads even while ATS is actively fighting (OCR/timing noise, a skill
@@ -386,63 +382,47 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     import pc.routine.step_move_to_hotel as step2
     mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 95.0))
 
-    for attempt in range(HASTE_STEP2_MAX_RESTARTS + 1):
-        # The hotel key is a persistent precondition for every [2단계]
-        # entry, independent of current MP. Check it before the MP-full
-        # shortcut so a full gauge cannot bypass an expired/missing key.
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        hotel_key = build_icon_detector(
-            settings["icons"]["hotel_key"], project_root, panel=skill_panel
-        ).measure(frame)
-        if not hotel_key.present:
-            print("  hotel_key not present -- running [1단계] first...")
-            ok = step1.run(
-                settings, project_root, window_title, link, skill_panel,
-                hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
-            )
-            if not ok:
-                print("  [1단계] failed.")
-                return False
-
-        if force_run:
-            print("  forced [2단계] recovery -- ignoring HP/MP readiness shortcut")
-            gauges_ready = False
-        else:
-            gauges_ready = _are_hp_mp_ready(
-                hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
-            )
-
-        if not gauges_ready:
-            ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
-            if not ok:
-                print("  [2단계] failed.")
-                return False
-            _wait_for_ready_hp_mp(
-                hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
-            )
-        else:
-            print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% on consecutive checks -- skipping [2단계] meditation")
-
-        haste_status = step2._ensure_haste(
-            settings, project_root, link, skill_panel, window_title, screen_capture_cls
+    # The hotel key is a persistent precondition for every [2단계]
+    # entry, independent of current MP. Check it before the readiness
+    # shortcut so a full gauge cannot bypass an expired/missing key.
+    with screen_capture_cls(window_title=window_title) as cap:
+        frame = cap.grab()
+    hotel_key = build_icon_detector(
+        settings["icons"]["hotel_key"], project_root, panel=skill_panel
+    ).measure(frame)
+    if not hotel_key.present:
+        print("  hotel_key not present -- running [1단계] first...")
+        ok = step1.run(
+            settings, project_root, window_title, link, skill_panel,
+            hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
         )
-        if haste_status == "active":
-            return True
-        if haste_status == "failed":
-            print("  [2단계] failed while clicking haste.")
+        if not ok:
+            print("  [1단계] failed.")
             return False
 
-        if _are_hp_mp_ready(hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent):
-            print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% after haste -- continuing to [3단계]")
-            return True
-        if attempt < HASTE_STEP2_MAX_RESTARTS:
-            print(f"  HP/MP dropped below readiness after haste -- restarting [2단계] once")
-            continue
-        print("  HP/MP still below readiness after the one [2단계] restart -- stopping safely")
-        return False
+    if force_run:
+        print("  forced [2단계] recovery -- ignoring HP/MP readiness shortcut")
+        gauges_ready = False
+    else:
+        gauges_ready = _are_hp_mp_ready(
+            hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
+        )
 
-    return False
+    if not gauges_ready:
+        ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
+        if not ok:
+            print("  [2단계] failed.")
+            return False
+        _wait_for_ready_hp_mp(
+            hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
+        )
+    else:
+        print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% on consecutive checks -- skipping [2단계] meditation")
+
+    step2.ensure_mana(
+        settings, project_root, link, skill_panel, window_title, screen_capture_cls
+    )
+    return True
 
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
@@ -452,23 +432,17 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     precondition and MP-100% wait) once MP <= 5%, as a reusable function
     (for pc/routine/run_all.py) instead of a script entry point. Returns
     True only if it got all the way through the hand-off and
-    ensure_step2() also succeeded -- False if the initial teleport or
-    ATS toggle failed, the monitoring loop ended via the MAX_TICKS
+    ensure_step2() also succeeded -- False if the ATS toggle failed,
+    the monitoring loop ended via the MAX_TICKS
     safety fallback instead of the normal MP<=5% exit, or the hand-off
     itself failed."""
-    print("[1/3] teleport (initial reposition, before turning ATS on)...")
-    ok = click_teleport_icon(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
-    if not ok:
-        print("[stop] initial teleport failed.")
-        return False
-
-    print("[2/3] toggling ATS ON (double-clicking icon_ats_off)...")
+    print("[1/2] toggling ATS ON (double-clicking icon_ats_off)...")
     ok = toggle_ats_on(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
     if not ok:
         print("[stop] could not toggle ATS on (neither ats_off nor ats_on present, or click failed).")
         return False
 
-    print("[3/3] monitoring HP/MP every 1s until MP <= 5%...")
+    print("[2/2] monitoring HP/MP every 1s until MP <= 5%...")
     should_hand_off = monitor_and_hunt(link, settings, project_root, skill_panel, hp_detector, mp_detector, window_title, screen_capture_cls)
 
     if not should_hand_off:
