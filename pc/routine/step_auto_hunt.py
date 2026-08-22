@@ -7,13 +7,15 @@
    시작하기 위함).
 2. icon_ats_off를 더블클릭 -> icon_ats_on 상태로 토글.
 3. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
+   - HP <= 70%가 2틱 연속 확인되면 F9 키를 두 번 입력하고, HP가 70%를
+     초과할 때까지 매 감시 주기마다 반복한다.
    - HP <= 50% 이면 icon_teleport 더블클릭 -> F9 키 두 번 입력 (위기 대응: 일단
      자리를 피하고 힐). 힐은 원래 icon_heel 더블클릭이었는데, 사용자 요청으로 F9
      키보드 단축키 두 번으로 변경했다 (press_heel_key()) -- 아이콘 탐지/F2 탭
      전환이 필요 없어서 더 빠르다.
    - MP <= 5%가 2틱 연속으로 나오면 루프 종료 -- 더 이상 사냥을 지속할 마력이
      없다고 보고 ensure_step2()로 넘어간다: hotel_key 확인(없으면 [1단계]부터)
-     -> [2단계](여관 이동 -> 메디테이션) -> MP 100% 대기, 까지 전부 자동으로
+     -> [2단계](여관 이동 -> 메디테이션) -> HP 100% / MP 준비값 대기, 까지 전부 자동으로
      처리하고 다음 사이클([3단계]) 진입 준비가 된 상태로 반환한다 (같은
      SerialLink 연결을 그대로 재사용 -- 재접속 안 함). 1틱만 보고 바로
      반응하지 않는 이유는 실기에서 확인됨: OCR이 자릿수를 통째로 잘못 읽어
@@ -60,8 +62,10 @@ from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
+HP_HEAL_PERCENT = 70.0
 HP_EMERGENCY_PERCENT = 50.0
 MP_EXIT_PERCENT = 5.0
+HP_HEAL_CONSECUTIVE_TICKS = 2
 
 # A serial ACK only confirms that the Arduino emitted the HID event; it
 # does not mean the game accepted it. Let the teleport transition finish
@@ -197,6 +201,7 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
     last_mp_current: Optional[int] = None
     stagnant_ticks = 0
     low_mp_ticks = 0
+    low_heal_ticks = 0
     last_emergency_time: Optional[float] = None
     heal_baseline_hp: Optional[int] = None
     ats_off_detector = build_ats_off_detector(settings, project_root, skill_panel)
@@ -252,6 +257,7 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
 
         handled_emergency = False
         if hp.percent <= HP_EMERGENCY_PERCENT:
+            low_heal_ticks = 0
             handled_emergency = True
             stagnant_ticks = 0  # already teleported this tick for a different reason
             now = time.monotonic()
@@ -277,6 +283,25 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
                 remaining = EMERGENCY_ACTION_COOLDOWN_S - (now - last_emergency_time)
                 print(f"    [emergency] action cooldown ({max(0.0, remaining):.1f}s remaining)")
 
+        elif hp.percent <= HP_HEAL_PERCENT:
+            handled_emergency = True
+            low_heal_ticks += 1
+            if low_heal_ticks >= HP_HEAL_CONSECUTIVE_TICKS:
+                print(
+                    f"    [heal] HP <= {HP_HEAL_PERCENT:.0f}% "
+                    f"({low_heal_ticks} consecutive ticks) -- pressing F9 twice"
+                )
+                healed = press_heel_key(link)
+                if healed:
+                    heal_baseline_hp = hp.current
+            else:
+                print(
+                    f"    [heal] HP <= {HP_HEAL_PERCENT:.0f}% "
+                    f"({low_heal_ticks}/{HP_HEAL_CONSECUTIVE_TICKS} consecutive ticks)"
+                )
+        else:
+            low_heal_ticks = 0
+
         if not handled_emergency:
             if last_mp_current is not None and mp.current >= last_mp_current:
                 stagnant_ticks += 1
@@ -294,15 +319,16 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
     return False
 
 
-def _wait_for_full_hp_mp(hp_detector, mp_detector, window_title: str, screen_capture_cls,
-                         poll_interval_s: float = MONITOR_INTERVAL_S) -> None:
-    """Poll until both HP and MP read exactly full --
+def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                          mp_ready_percent: float,
+                          poll_interval_s: float = MONITOR_INTERVAL_S) -> None:
+    """Poll until HP is full and MP reaches the configured readiness level --
     meditation (from [2단계]) doesn't complete instantly, and the user's
-    design has [3단계] only start once MP is back to 100%, not just
-    "high enough". A None reading (anchor briefly not found, etc.) just
+    design has [3단계] only start once both gauges are ready. A None
+    reading (anchor briefly not found, etc.) just
     waits and retries rather than erroring -- this isn't safety-critical
     like the HP/MP watchdog elsewhere, it's a readiness gate."""
-    print("  HP/MP 100% 대기 중...")
+    print(f"  HP 100% / MP {mp_ready_percent:.0f}% 이상 대기 중...")
     while True:
         with screen_capture_cls(window_title=window_title) as cap:
             frame = cap.grab()
@@ -311,14 +337,15 @@ def _wait_for_full_hp_mp(hp_detector, mp_detector, window_title: str, screen_cap
         if hp_result is not None and mp_result is not None:
             hp = hp_result.reading
             mp = mp_result.reading
-            if hp.current >= hp.maximum and mp.current >= mp.maximum:
-                print(f"  HP {hp.current}/{hp.maximum} (100%)  MP {mp.current}/{mp.maximum} (100%) -- 대기 종료")
+            if hp.current >= hp.maximum and mp.percent >= mp_ready_percent:
+                print(f"  HP {hp.current}/{hp.maximum} (100%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%) -- 대기 종료")
                 return
             print(f"    HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%) -- 대기...")
         time.sleep(poll_interval_s)
 
 
-def _are_hp_mp_already_full(hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
+def _are_hp_mp_ready(hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                     mp_ready_percent: float) -> bool:
     for check in range(1, MP_FULL_SKIP_CONSECUTIVE_READS + 1):
         with screen_capture_cls(window_title=window_title) as cap:
             frame = cap.grab()
@@ -334,7 +361,7 @@ def _are_hp_mp_already_full(hp_detector, mp_detector, window_title: str, screen_
             f"HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  "
             f"MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%)"
         )
-        if hp.current < hp.maximum or mp.current < mp.maximum:
+        if hp.current < hp.maximum or mp.percent < mp_ready_percent:
             return False
         if check < MP_FULL_SKIP_CONSECUTIVE_READS:
             time.sleep(MP_FULL_SKIP_CONFIRM_INTERVAL_S)
@@ -347,13 +374,15 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     """Runs [2단계], first running [1단계] if icon_hotel_key isn't
     present in roi_skill (the 4-hour room rental can expire mid-loop, so
     this precondition is re-checked every time, not just once at
-    startup) -- then waits for MP to read back 100% before returning.
+    startup) -- then waits for HP 100% and the configured MP readiness
+    percentage before returning.
     Shared by run()'s MP<=5% handoff below and
     pc/routine/run_all.py's initial entry point, so both go through
     the exact same "ensure the precondition, run [2단계], wait for full
     MP" sequence the user specified."""
     import pc.routine.step_buy_hotel_key as step1
     import pc.routine.step_move_to_hotel as step2
+    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
 
     for attempt in range(HASTE_STEP2_MAX_RESTARTS + 1):
         # The hotel key is a persistent precondition for every [2단계]
@@ -374,14 +403,16 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
                 print("  [1단계] failed.")
                 return False
 
-        if not _are_hp_mp_already_full(hp_detector, mp_detector, window_title, screen_capture_cls):
+        if not _are_hp_mp_ready(hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent):
             ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
             if not ok:
                 print("  [2단계] failed.")
                 return False
-            _wait_for_full_hp_mp(hp_detector, mp_detector, window_title, screen_capture_cls)
+            _wait_for_ready_hp_mp(
+                hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
+            )
         else:
-            print("  HP and MP already 100% on consecutive checks -- skipping [2단계] meditation")
+            print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% on consecutive checks -- skipping [2단계] meditation")
 
         haste_status = step2._ensure_haste(
             settings, project_root, link, skill_panel, window_title, screen_capture_cls
@@ -392,13 +423,13 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
             print("  [2단계] failed while clicking haste.")
             return False
 
-        if _are_hp_mp_already_full(hp_detector, mp_detector, window_title, screen_capture_cls):
-            print("  HP and MP still 100% after haste -- continuing to [3단계]")
+        if _are_hp_mp_ready(hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent):
+            print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% after haste -- continuing to [3단계]")
             return True
         if attempt < HASTE_STEP2_MAX_RESTARTS:
-            print("  MP dropped below 100% after haste clicks -- restarting [2단계] once")
+            print(f"  HP/MP dropped below readiness after haste -- restarting [2단계] once")
             continue
-        print("  MP still below 100% after the one [2단계] restart -- stopping safely")
+        print("  HP/MP still below readiness after the one [2단계] restart -- stopping safely")
         return False
 
     return False
@@ -434,7 +465,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         print("[stop] not handing off to [2단계] -- monitoring loop ended abnormally (see [warn] above).")
         return False
 
-    print("Handing off to [2단계] (hotel_key 확인 -> 여관 이동 + 메디테이션 -> MP 100% 대기)...")
+    print("Handing off to [2단계] (hotel_key 확인 -> 여관 이동 + 메디테이션 -> HP/MP 준비 대기)...")
     ok = ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                        hotel_text, rent_room_text, ok_button_text, screen_capture_cls)
     print(f"[2단계] handoff -> {'ok' if ok else 'FAILED'}")
