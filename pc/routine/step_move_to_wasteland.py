@@ -7,6 +7,11 @@
    땅" 텍스트의 랜덤한 부분을 원클릭
 5. 4번이 여는 세 번째 dialog(레벨 제한 안내 + 최종 진입 확인)에서 "발을 내딛는다"
    텍스트를 원클릭
+6. 실제로 "버림받은 자들의 땅"으로 위치가 바뀌었는지 확인
+   (location anchor + fixed-label template matching).
+   실기에서 5번 클릭이 ACK는 성공해도 실제로 텔레포트가 안 되는 경우가 확인돼서
+   추가함 -- 확인 안 되면 "발을 내딛는다"를 다시 찾아 재클릭한다
+   (`location.verify_timeout_seconds` 동안 재확인).
 
 icon_teleport_scroll도 hotel_key/meditation과 같은 F2 quick-slot 탭에 있으므로
 step_move_to_hotel의 ensure_skill_tab()/double_click_region()을 그대로 재사용한다.
@@ -45,6 +50,7 @@ import random
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -86,7 +92,12 @@ GATE_SIBLING_NEEDLE = "심연"
 # row above/below it.
 GATE_ROW_Y_TOLERANCE = 20
 
-
+# Confirmed live: the "발을 내딛는다" click can ACK fine (the Arduino did
+# physically click) without actually teleporting the character -- same
+# false-success pattern as meditation in step_move_to_hotel.py. Instead
+# of trusting the ACK, re-check the character's actual location via
+# `location`'s anchor+offset and target template (see settings.yaml),
+# and retry the click if it doesn't show the wasteland yet.
 def _select_wasteland_gate_destination(lines: List[Tuple[str, Region]]) -> Optional[Region]:
     """"버림받은 자들의 땅" (not its "...: 심연" sibling) inside the
     npc_teleport_gate confirm dialog. Picks the box containing "버림받은"
@@ -113,6 +124,89 @@ def _build_dialog_content_locator(settings: dict, project_root: Path) -> WindowC
     dialog_cfg = settings["dialog"]
     border = SkillPanelLocator(project_root / dialog_cfg["template"], dialog_cfg.get("match_threshold", 0.85))
     return WindowContentLocator(border, ContentOffset(**dialog_cfg["content_offset"]))
+
+
+def build_location_content_locator(settings: dict, project_root: Path) -> WindowContentLocator:
+    """`location`'s anchor (the static stat-panel icon right below where
+    the location name renders, see settings.yaml) + fixed offset -- only
+    visible outdoors, blank indoors/in the hotel room."""
+    loc_cfg = settings["location"]
+    anchor = SkillPanelLocator(project_root / loc_cfg["template"], loc_cfg.get("match_threshold", 0.75))
+    return WindowContentLocator(anchor, ContentOffset(**loc_cfg["content_offset"]))
+
+
+@dataclass
+class LocationTemplateVerifier:
+    template: np.ndarray
+    threshold: float
+
+    @staticmethod
+    def _text_mask(image: np.ndarray) -> np.ndarray:
+        """Keep the pink/red location-label pixels and discard terrain.
+
+        The label is fixed but the transparent UI background changes
+        with the terrain (dark grass, bright snow, etc.). Matching this
+        mask makes the verifier depend on the glyphs rather than the
+        world behind them.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        red_low = cv2.inRange(hsv, (0, 35, 100), (18, 255, 255))
+        red_high = cv2.inRange(hsv, (165, 35, 100), (179, 255, 255))
+        return cv2.bitwise_or(red_low, red_high)
+
+    def measure(self, crop: np.ndarray) -> PresenceResult:
+        """Return the real best score even when it is below threshold."""
+        th, tw = self.template.shape[:2]
+        ch, cw = crop.shape[:2]
+        if ch < th or cw < tw:
+            return PresenceResult(present=False, region=None, match_score=0.0)
+        result = cv2.matchTemplate(
+            self._text_mask(crop), self._text_mask(self.template), cv2.TM_CCOEFF_NORMED
+        )
+        _, max_score, _, max_loc = cv2.minMaxLoc(result)
+        region = Region(left=max_loc[0], top=max_loc[1], width=tw, height=th)
+        return PresenceResult(
+            present=max_score >= self.threshold,
+            region=region,
+            match_score=float(max_score),
+        )
+
+
+def build_wasteland_location_detector(settings: dict, project_root: Path) -> LocationTemplateVerifier:
+    """Build the fixed-label verifier used after teleporting.
+
+    The location label is a tiny outlined game font. The Korean OCR
+    model consistently misreads this otherwise correctly cropped text,
+    so exact-location verification uses a dedicated visual template.
+    """
+    loc_cfg = settings["location"]
+    template_path = project_root / loc_cfg["target_template"]
+    template = cv2.imread(str(template_path))
+    if template is None:
+        raise FileNotFoundError(f"Could not load location template image: {template_path}")
+    return LocationTemplateVerifier(template, float(loc_cfg.get("target_match_threshold", 0.8)))
+
+
+def measure_wasteland_location(content_locator: WindowContentLocator,
+                               detector: LocationTemplateVerifier,
+                               frame: np.ndarray) -> PresenceResult:
+    crop = content_locator.crop_content(frame)
+    if crop is None:
+        return PresenceResult(present=False, region=None, match_score=0.0)
+    return detector.measure(crop)
+
+
+def save_location_debug_crop(content_locator: WindowContentLocator, frame: np.ndarray,
+                             output_dir: Path, attempt: int) -> Optional[Path]:
+    crop = content_locator.crop_content(frame)
+    if crop is None or crop.size == 0:
+        return None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp_ms = int(time.time() * 1000)
+    path = output_dir / f"location_verify_fail_{timestamp_ms}_{attempt:02d}.png"
+    if not cv2.imwrite(str(path), crop):
+        return None
+    return path
 
 
 def build_wasteland_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
@@ -268,15 +362,16 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         wasteland_text: RememberedDialogText, gate_dest_text: RememberedDialogText, step_forward_text: RememberedDialogText,
-        screen_capture_cls) -> bool:
-    """Full [3단계]: the 5 sub-actions from the module docstring, as a
-    reusable function (for pc/routine/run_all.py) instead of a script
-    entry point. Takes pre-built RememberedDialogText locators so their
-    OCR caches persist across repeated calls in a long-running loop
-    instead of resetting every process invocation. Returns False as
-    soon as any sub-action fails to find its target or ACK (including
-    the gate-click retry loop exhausting its attempts)."""
-    print("[1/5] teleport_scroll: pressing F2...")
+        reader: KoreanTextReader, screen_capture_cls) -> bool:
+    """Full [3단계]: the 5 sub-actions from the module docstring plus a
+    final location check, as a reusable function (for
+    pc/routine/run_all.py) instead of a script entry point. Takes
+    pre-built RememberedDialogText locators so their OCR caches persist
+    across repeated calls in a long-running loop instead of resetting
+    every process invocation. Returns False as soon as any sub-action
+    fails to find its target or ACK (including the gate-click retry
+    loop exhausting its attempts, or the location never confirming)."""
+    print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
         print("[stop] F2 keypress not ACKed")
         return False
@@ -298,7 +393,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
     time.sleep(DIALOG_OPEN_SETTLE_S)
 
-    print("[2/5] finding '* [오렌] 버려진땅' text...")
+    print("[2/6] finding '* [오렌] 버려진땅' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     target = wasteland_text.find(frame)
     print(f"  target region: {target}")
@@ -313,7 +408,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"Waiting {GATE_RENDER_SETTLE_S}s for the teleport gate to render...")
     time.sleep(GATE_RENDER_SETTLE_S)
 
-    print("[3/5] finding npc_teleport_gate (with retry-on-miss)...")
+    print("[3/6] finding npc_teleport_gate (with retry-on-miss)...")
     dest_target = None
     for attempt in range(1, GATE_CLICK_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -356,7 +451,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             print(f"    retreat click -> {'ok' if retreat_ok else 'FAILED (missing ACK)'}")
             time.sleep(RETREAT_SETTLE_S)
 
-    print("[4/5] clicking '버림받은 자들의 땅' (exact, not '...심연')...")
+    print("[4/6] clicking '버림받은 자들의 땅' (exact, not '...심연')...")
     if dest_target is None:
         print(f"[stop] destination dialog never opened after {GATE_CLICK_MAX_ATTEMPTS} attempts.")
         return False
@@ -368,7 +463,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for the level-requirement/confirm dialog...")
     time.sleep(DIALOG_OPEN_SETTLE_S)
 
-    print("[5/5] finding '발을 내딛는다' text...")
+    print("[5/6] finding '발을 내딛는다' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     forward_target = step_forward_text.find(frame)
     print(f"  target region: {forward_target}")
@@ -377,8 +472,49 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
     ok = click_region_once(link, converter, forward_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    time.sleep(0.6)
-    return ok
+    if not ok:
+        return False
+
+    print("[6/6] verifying location changed to '버림받은 자들의 땅'...")
+    location_content_locator = build_location_content_locator(settings, project_root)
+    location_detector = build_wasteland_location_detector(settings, project_root)
+    location_cfg = settings["location"]
+    verify_timeout_s = float(location_cfg.get("verify_timeout_seconds", 6.0))
+    verify_interval_s = float(location_cfg.get("verify_interval_seconds", 0.5))
+    deadline = time.monotonic() + verify_timeout_s
+    attempt = 0
+    retried_click = False
+    while time.monotonic() < deadline:
+        time.sleep(verify_interval_s)
+        attempt += 1
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        location_result = measure_wasteland_location(location_content_locator, location_detector, frame)
+        print(f"  location check {attempt}: present={location_result.present} score={location_result.match_score:.3f}")
+        if location_result.present:
+            print("  location confirmed -- [3단계] complete")
+            return True
+        debug_path = save_location_debug_crop(
+            location_content_locator, frame, project_root / "output", attempt
+        )
+        if debug_path is not None:
+            print(f"    saved failed location ROI: {debug_path}")
+        else:
+            print("    location anchor/ROI unavailable; no debug crop saved")
+
+        # If the confirmation dialog is still visible, the previous HID
+        # click did not take effect. Retry it once, then keep polling the
+        # actual location until the timeout instead of assuming a fixed
+        # transition time.
+        if not retried_click:
+            retry_target = step_forward_text.find(frame)
+            if retry_target is not None:
+                print("  location not confirmed -- '발을 내딛는다' still there, retrying click...")
+                retry_ok = click_region_once(link, converter, retry_target)
+                print(f"    retry click -> {'ok' if retry_ok else 'FAILED (missing ACK)'}")
+                retried_click = True
+
+    print(f"[stop] location never confirmed as '버림받은 자들의 땅' within {verify_timeout_s:.1f}s.")
+    return False
 
 
 def main() -> None:
@@ -391,7 +527,10 @@ def main() -> None:
     window_title = settings["capture"]["window_title"]
 
     roi_skill_cfg = settings["roi_skill"]
-    skill_panel = SkillPanelLocator(_PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+    skill_panel = SkillPanelLocator(
+        _PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"],
+        roi_skill_cfg.get("search_region"),
+    )
 
     print("Loading Korean OCR model...")
     reader = KoreanTextReader()
@@ -408,7 +547,7 @@ def main() -> None:
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel,
-                     wasteland_text, gate_dest_text, step_forward_text, ScreenCapture)
+                     wasteland_text, gate_dest_text, step_forward_text, reader, ScreenCapture)
             if not ok:
                 sys.exit(1)
     except WindowNotFoundError as e:

@@ -228,7 +228,10 @@ def main() -> None:
     window_title = settings["capture"]["window_title"]
 
     roi_skill_cfg = settings["roi_skill"]
-    skill_panel = SkillPanelLocator(_PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+    skill_panel = SkillPanelLocator(
+        _PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"],
+        roi_skill_cfg.get("search_region"),
+    )
 
     print("Loading Korean OCR model...")
     reader = KoreanTextReader()

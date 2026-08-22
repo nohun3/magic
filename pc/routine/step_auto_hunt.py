@@ -7,7 +7,7 @@
    시작하기 위함).
 2. icon_ats_off를 더블클릭 -> icon_ats_on 상태로 토글.
 3. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
-   - HP <= 60% 이면 icon_teleport 더블클릭 -> F9 키 두 번 입력 (위기 대응: 일단
+   - HP <= 50% 이면 icon_teleport 더블클릭 -> F9 키 두 번 입력 (위기 대응: 일단
      자리를 피하고 힐). 힐은 원래 icon_heel 더블클릭이었는데, 사용자 요청으로 F9
      키보드 단축키 두 번으로 변경했다 (press_heel_key()) -- 아이콘 탐지/F2 탭
      전환이 필요 없어서 더 빠르다.
@@ -24,10 +24,13 @@
      잡을 몬스터가 없어서 ATS가 멈춰 있다는 뜻으로 보고, 사냥터를 옮기기 위해 다시
      텔레포트한다. 1틱만 보고 바로 반응하면 OCR/타이밍 노이즈(스킬이 마침 그 틱에
      0 코스트였다든가)에도 반응해버려서 5틱 연속 조건으로 완화했다.
+   - icon_ats_off가 감지되면 ATS가 자동으로 꺼진 것으로 보고 즉시 모니터링을
+     종료한 뒤 ensure_step2()를 통해 [2단계]부터 다시 진행한다.
 
-HP 비상 텔레포트와 MP 정체 텔레포트는 같은 틱에 중복 실행하지 않는다(이미 위기
-대응으로 텔레포트했으면 그 틱엔 정체 카운터를 리셋하고 건너뜀) -- 그 외엔 각 조건이
-독립적으로 매 틱 평가된다.
+MP 5% 이하 복귀 조건을 HP 비상 텔레포트보다 먼저 평가한다. 두 값이
+동시에 임계값 이하면 사망 위험을 줄이기 위해 MP 2틱 확인을 생략하고 즉시
+[2단계]로 복귀한다. HP가 안전하면 기존처럼 MP 2틱 연속 확인으로 OCR
+오판을 방지한다.
 
 icon_ats_off/icon_teleport 둘 다 hotel_key/meditation과 같은 F2
 quick-slot 탭에 있으므로 step_move_to_hotel의
@@ -57,8 +60,17 @@ from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
-HP_EMERGENCY_PERCENT = 60.0
+HP_EMERGENCY_PERCENT = 50.0
 MP_EXIT_PERCENT = 5.0
+
+# A serial ACK only confirms that the Arduino emitted the HID event; it
+# does not mean the game accepted it. Let the teleport transition finish
+# before healing, hold F9 long enough to cross a game input poll, and do
+# not restart another teleport every monitor tick while HP is still low.
+EMERGENCY_TELEPORT_SETTLE_S = 1.5
+EMERGENCY_ACTION_COOLDOWN_S = 3.0
+HEEL_KEY_HOLD_MS = 100
+HEEL_KEY_INTERVAL_S = 0.12
 
 # Confirmed live: a single-tick OCR misread (e.g. "358" -> "3", a digit
 # dropped rather than the "/"-misread ResilientGaugeReader already
@@ -68,6 +80,14 @@ MP_EXIT_PERCENT = 5.0
 # trusting it -- one bad OCR tick surrounded by normal ones won't
 # survive that, a genuine MP crash will.
 MP_EXIT_CONSECUTIVE_TICKS = 2
+
+# Skip [2단계] entirely when MP is already full, but require two
+# consecutive readings because live OCR occasionally produces a single
+# implausible spike. This prevents wasting a hotel teleport/meditation
+# while still avoiding a false skip from one bad frame.
+MP_FULL_SKIP_CONSECUTIVE_READS = 2
+MP_FULL_SKIP_CONFIRM_INTERVAL_S = 0.2
+HASTE_STEP2_MAX_RESTARTS = 1
 
 # MP naturally holds steady/ticks sideways by a point or two between
 # reads even while ATS is actively fighting (OCR/timing noise, a skill
@@ -151,14 +171,17 @@ def press_heel_key(link: SerialLink) -> bool:
     """[4단계]'s heal action -- press F9 twice, per the user's explicit
     change from double-clicking icon_heel to a keyboard shortcut. No
     icon detection/F2 tab involved, unlike the other actions here."""
-    first = link.send_and_wait("KEY", "F9")
+    first = link.send_and_wait("KEY", f"F9 {HEEL_KEY_HOLD_MS}")
     if first is None or not first.ok:
         print("    [heel] F9 (1st) -> FAILED (missing ACK)")
         return False
-    time.sleep(0.15)
-    second = link.send_and_wait("KEY", "F9")
+    time.sleep(HEEL_KEY_INTERVAL_S)
+    second = link.send_and_wait("KEY", f"F9 {HEEL_KEY_HOLD_MS}")
     ok = second is not None and second.ok
-    print(f"    [heel] F9 x2 -> {'ok' if ok else 'FAILED (missing ACK)'}")
+    print(
+        f"    [heel] F9 x2 (hold={HEEL_KEY_HOLD_MS}ms, "
+        f"gap={HEEL_KEY_INTERVAL_S:.2f}s) -> {'ok' if ok else 'FAILED (missing ACK)'}"
+    )
     return ok
 
 
@@ -174,6 +197,9 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
     last_mp_current: Optional[int] = None
     stagnant_ticks = 0
     low_mp_ticks = 0
+    last_emergency_time: Optional[float] = None
+    heal_baseline_hp: Optional[int] = None
+    ats_off_detector = build_ats_off_detector(settings, project_root, skill_panel)
 
     for tick in range(1, MAX_TICKS + 1):
         time.sleep(MONITOR_INTERVAL_S)
@@ -191,22 +217,65 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
         mp = mp_result.reading
         print(f"  tick {tick}: HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%)")
 
-        handled_emergency = False
-        if hp.percent <= HP_EMERGENCY_PERCENT:
-            print("    [emergency] HP <= 60% -- teleport then heel")
-            click_teleport_icon(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
-            press_heel_key(link)
-            handled_emergency = True
-            stagnant_ticks = 0  # already teleported this tick for a different reason
+        ats_off = ats_off_detector.measure(frame)
+        if ats_off.present:
+            print(
+                f"    [ATS OFF] icon_ats_off detected (score={ats_off.match_score:.3f}) "
+                "-- immediate handoff to [2단계]"
+            )
+            return True
 
+        if heal_baseline_hp is not None:
+            delta = hp.current - heal_baseline_hp
+            print(f"    [heel verify] HP change after last heal: {delta:+d} ({heal_baseline_hp} -> {hp.current})")
+            heal_baseline_hp = None
+
+        # Returning to the hotel takes priority over emergency combat
+        # actions. When both resources are critical, waiting for a
+        # second MP OCR sample plus teleport/heal delays the hotel key
+        # long enough to risk death. Keep the two-sample OCR guard only
+        # while HP is above the emergency threshold.
         if mp.percent <= MP_EXIT_PERCENT:
             low_mp_ticks += 1
+            if hp.percent <= HP_EMERGENCY_PERCENT:
+                print(
+                    f"    [critical exit] MP <= {MP_EXIT_PERCENT:.0f}% and "
+                    f"HP <= {HP_EMERGENCY_PERCENT:.0f}% -- immediate handoff to [2단계]"
+                )
+                return True
             print(f"    MP <= 5% ({low_mp_ticks}/{MP_EXIT_CONSECUTIVE_TICKS} consecutive ticks)")
             if low_mp_ticks >= MP_EXIT_CONSECUTIVE_TICKS:
                 print("    [exit] MP <= 5% held for 2 consecutive ticks -- ending [4단계], hand off to [2단계]")
                 return True
         else:
             low_mp_ticks = 0
+
+        handled_emergency = False
+        if hp.percent <= HP_EMERGENCY_PERCENT:
+            handled_emergency = True
+            stagnant_ticks = 0  # already teleported this tick for a different reason
+            now = time.monotonic()
+            cooldown_ready = (
+                last_emergency_time is None
+                or now - last_emergency_time >= EMERGENCY_ACTION_COOLDOWN_S
+            )
+            if cooldown_ready:
+                print(f"    [emergency] HP <= {HP_EMERGENCY_PERCENT:.0f}% -- teleport, settle, then heal")
+                teleported = click_teleport_icon(
+                    link, settings, project_root, skill_panel, window_title, screen_capture_cls
+                )
+                if teleported:
+                    print(f"    [emergency] waiting {EMERGENCY_TELEPORT_SETTLE_S:.1f}s for teleport transition...")
+                    time.sleep(EMERGENCY_TELEPORT_SETTLE_S)
+                else:
+                    print("    [emergency] teleport failed; attempting heal in place")
+                healed = press_heel_key(link)
+                if healed:
+                    heal_baseline_hp = hp.current
+                last_emergency_time = time.monotonic()
+            else:
+                remaining = EMERGENCY_ACTION_COOLDOWN_S - (now - last_emergency_time)
+                print(f"    [emergency] action cooldown ({max(0.0, remaining):.1f}s remaining)")
 
         if not handled_emergency:
             if last_mp_current is not None and mp.current >= last_mp_current:
@@ -246,6 +315,26 @@ def _wait_for_full_mp(mp_detector, window_title: str, screen_capture_cls, poll_i
         time.sleep(poll_interval_s)
 
 
+def _is_mp_already_full(mp_detector, window_title: str, screen_capture_cls) -> bool:
+    for check in range(1, MP_FULL_SKIP_CONSECUTIVE_READS + 1):
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        result = mp_detector.measure(frame)
+        if result is None:
+            print(f"  MP pre-check {check}/{MP_FULL_SKIP_CONSECUTIVE_READS}: unreadable -- running [2단계]")
+            return False
+        mp = result.reading
+        print(
+            f"  MP pre-check {check}/{MP_FULL_SKIP_CONSECUTIVE_READS}: "
+            f"{mp.current}/{mp.maximum} ({mp.percent:.1f}%)"
+        )
+        if mp.current < mp.maximum:
+            return False
+        if check < MP_FULL_SKIP_CONSECUTIVE_READS:
+            time.sleep(MP_FULL_SKIP_CONFIRM_INTERVAL_S)
+    return True
+
+
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
                   mp_detector, hotel_text, rent_room_text, ok_button_text, screen_capture_cls) -> bool:
     """Runs [2단계], first running [1단계] if icon_hotel_key isn't
@@ -259,24 +348,53 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     import pc.routine.step_buy_hotel_key as step1
     import pc.routine.step_move_to_hotel as step2
 
-    with screen_capture_cls(window_title=window_title) as cap:
-        frame = cap.grab()
-    hotel_key = build_icon_detector(settings["icons"]["hotel_key"], project_root, panel=skill_panel).measure(frame)
-    if not hotel_key.present:
-        print("  hotel_key not present -- running [1단계] first...")
-        ok = step1.run(settings, project_root, window_title, link, skill_panel,
-                        hotel_text, rent_room_text, ok_button_text, screen_capture_cls)
-        if not ok:
-            print("  [1단계] failed.")
+    for attempt in range(HASTE_STEP2_MAX_RESTARTS + 1):
+        # The hotel key is a persistent precondition for every [2단계]
+        # entry, independent of current MP. Check it before the MP-full
+        # shortcut so a full gauge cannot bypass an expired/missing key.
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        hotel_key = build_icon_detector(
+            settings["icons"]["hotel_key"], project_root, panel=skill_panel
+        ).measure(frame)
+        if not hotel_key.present:
+            print("  hotel_key not present -- running [1단계] first...")
+            ok = step1.run(
+                settings, project_root, window_title, link, skill_panel,
+                hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
+            )
+            if not ok:
+                print("  [1단계] failed.")
+                return False
+
+        if not _is_mp_already_full(mp_detector, window_title, screen_capture_cls):
+            ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
+            if not ok:
+                print("  [2단계] failed.")
+                return False
+            _wait_for_full_mp(mp_detector, window_title, screen_capture_cls)
+        else:
+            print("  MP already 100% on consecutive checks -- skipping [2단계] meditation")
+
+        haste_status = step2._ensure_haste(
+            settings, project_root, link, skill_panel, window_title, screen_capture_cls
+        )
+        if haste_status == "active":
+            return True
+        if haste_status == "failed":
+            print("  [2단계] failed while clicking haste.")
             return False
 
-    ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
-    if not ok:
-        print("  [2단계] failed.")
+        if _is_mp_already_full(mp_detector, window_title, screen_capture_cls):
+            print("  MP still 100% after haste clicks -- continuing to [3단계]")
+            return True
+        if attempt < HASTE_STEP2_MAX_RESTARTS:
+            print("  MP dropped below 100% after haste clicks -- restarting [2단계] once")
+            continue
+        print("  MP still below 100% after the one [2단계] restart -- stopping safely")
         return False
 
-    _wait_for_full_mp(mp_detector, window_title, screen_capture_cls)
-    return True
+    return False
 
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
@@ -326,7 +444,10 @@ def main() -> None:
     window_title = settings["capture"]["window_title"]
 
     roi_skill_cfg = settings["roi_skill"]
-    skill_panel = SkillPanelLocator(_PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+    skill_panel = SkillPanelLocator(
+        _PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"],
+        roi_skill_cfg.get("search_region"),
+    )
 
     print("Loading OCR models (HP/MP gauge + Korean dialog)...")
     gauge_reader = GaugeTextReader()

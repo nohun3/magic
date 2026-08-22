@@ -75,6 +75,10 @@ TELEPORT_SETTLE_S = 1.5
 # once -- per the user, meditation can only be cast at MP >= 10.
 MEDITATION_RETRY_MIN_MP = 10
 MP_POLL_INTERVAL_S = 1.0
+HASTE_KEY = "F6"
+HASTE_KEY_PRESSES = 2
+HASTE_KEY_INTERVAL_S = 1.0
+
 
 # After the hotel_key double-click, press ESC this many times (picked
 # fresh each call) -- per the user's request, to clear out whatever
@@ -106,6 +110,11 @@ def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: Sk
 
 def build_haste_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["haste"], project_root, panel=skill_panel)
+
+
+def is_meditation_buff_active(settings: dict, project_root: Path, frame: np.ndarray) -> PresenceResult:
+    buff_panel = build_buff_panel(settings, project_root)
+    return build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
 
 
 def ensure_skill_tab(link: SerialLink) -> bool:
@@ -241,37 +250,32 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
 
 
 def _ensure_haste(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
-                   window_title: str, screen_capture_cls) -> bool:
-    """Before handing off to [3단계] (per the user): if `buffs.haste`
-    isn't active in roi_buff, double-click icon_haste 6 times, 1 second
-    apart. Unlike meditation, this doesn't re-check the buff between (or
-    after) the 6 clicks -- it just fires all 6 unconditionally once
-    triggered, per the user's spec."""
+                   window_title: str, screen_capture_cls) -> str:
+    """Return ``active``, ``clicked``, or ``failed``.
+
+    If `buffs.haste` is absent in roi_buff, press F6 twice, one second
+    apart. MP, rather than the buff icon, is checked by
+    ensure_step2() after those clicks to decide whether [2단계] must run
+    once more.
+    """
     buff_panel = build_buff_panel(settings, project_root)
     frame, _ = _capture_and_convert(window_title, screen_capture_cls)
     buff_result = build_haste_buff_detector(settings, project_root, buff_panel).measure(frame)
     if buff_result.present:
         print("  haste buff active -- ok")
-        return True
+        return "active"
 
-    print(f"  haste buff not active (score={buff_result.match_score:.3f}) -- double-clicking icon_haste x6, 1s apart")
-    if not ensure_skill_tab(link):
-        print("  [haste] F2 keypress not ACKed")
-        return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    haste_icon = build_haste_icon_detector(settings, project_root, skill_panel).measure(frame)
-    if not haste_icon.present or haste_icon.region is None:
-        print(f"  [haste] icon not present (score={haste_icon.match_score:.3f})")
-        return False
-
-    for i in range(1, 7):
-        ok = double_click_region(link, converter, haste_icon.region)
-        print(f"  [haste] double-click {i}/6 -> {'ok' if ok else 'FAILED (missing ACK)'}")
+    print(f"  haste buff not active (score={buff_result.match_score:.3f}) -- pressing {HASTE_KEY} x{HASTE_KEY_PRESSES}, 1s apart")
+    for i in range(1, HASTE_KEY_PRESSES + 1):
+        ack = link.send_and_wait("KEY", HASTE_KEY)
+        ok = ack is not None and ack.ok
+        print(f"  [haste] {HASTE_KEY} keypress {i}/{HASTE_KEY_PRESSES} -> {'ok' if ok else 'FAILED (missing ACK)'}")
         if not ok:
-            return False
-        if i < 6:
-            time.sleep(1.0)
-    return True
+            return "failed"
+        if i < HASTE_KEY_PRESSES:
+            time.sleep(HASTE_KEY_INTERVAL_S)
+
+    return "clicked"
 
 
 def _capture_and_convert(window_title: str, screen_capture_cls):
@@ -307,20 +311,27 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     time.sleep(TELEPORT_SETTLE_S)
 
     # -- sub-action 2: meditation --
-    if not ensure_skill_tab(link):
-        return False
+    # Do not toggle/cancel meditation when it is already active. The
+    # icon is a toggle-like action in practice, so blindly double-
+    # clicking it at every [2단계] entry can undo the state we need.
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
-    if not meditation.present or meditation.region is None:
-        return False
-    if not double_click_region(link, converter, meditation.region):
-        return False
+    meditation_buff = is_meditation_buff_active(settings, project_root, frame)
+    if meditation_buff.present:
+        print("  meditation buff already active -- skipping icon_meditation double-click")
+    else:
+        if not ensure_skill_tab(link):
+            return False
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
+        if not meditation.present or meditation.region is None:
+            return False
+        if not double_click_region(link, converter, meditation.region):
+            return False
 
-    if not _verify_and_retry_meditation(settings, project_root, link, skill_panel, mp_detector, window_title, screen_capture_cls):
-        return False
+        if not _verify_and_retry_meditation(settings, project_root, link, skill_panel, mp_detector, window_title, screen_capture_cls):
+            return False
 
-    # -- sub-action 3: haste, right before handing off to [3단계] --
-    return _ensure_haste(settings, project_root, link, skill_panel, window_title, screen_capture_cls)
+    return True
 
 
 def main() -> None:
@@ -335,7 +346,10 @@ def main() -> None:
     window_title = settings["capture"]["window_title"]
 
     roi_skill_cfg = settings["roi_skill"]
-    skill_panel = SkillPanelLocator(_PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+    skill_panel = SkillPanelLocator(
+        _PROJECT_ROOT / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"],
+        roi_skill_cfg.get("search_region"),
+    )
 
     print("Loading OCR model (HP/MP)...")
     gauge_reader = GaugeTextReader()

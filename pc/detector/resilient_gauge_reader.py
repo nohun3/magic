@@ -19,13 +19,14 @@ import numpy as np
 
 from pc.detector.ocr_reader import GaugeReading, GaugeTextReader
 
-_VALUE_PATTERN = re.compile(r"(\d+)\s*/\s*(\d+)")  # kept in sync with ocr_reader.py's pattern
+_VALUE_PATTERN = re.compile(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)")
 
 
 class ResilientGaugeReader:
     def __init__(self, reader: GaugeTextReader):
         self._reader = reader
         self._last_known_max: Optional[int] = None
+        self._last_known_current: Optional[int] = None
 
     def read(self, crop_bgr: np.ndarray) -> Optional[GaugeReading]:
         combined = " ".join(self._reader.read_lines(crop_bgr))
@@ -33,7 +34,10 @@ class ResilientGaugeReader:
         match = _VALUE_PATTERN.search(combined)
         if match:
             reading = GaugeReading(current=int(match.group(1)), maximum=int(match.group(2)))
+            if reading.maximum <= 0 or reading.current > reading.maximum:
+                return None
             self._last_known_max = reading.maximum
+            self._last_known_current = reading.current
             return reading
 
         return self._recover(combined)
@@ -54,14 +58,26 @@ class ResilientGaugeReader:
         if not prefix_digits:
             return None
 
-        # Try the prefix as-is first (covers "nothing actually went
-        # wrong here, the regex just didn't match for some other
-        # reason"), then with one trailing character dropped (the
-        # suspected misread "/").
-        for candidate in (prefix_digits, prefix_digits[:-1]):
-            if not candidate:
+        # "MP:39/447" can become "MP:391447" when OCR reads the slash
+        # as "1". That leaves two valid candidates: 391 (raw prefix) and
+        # 39 (drop the suspected separator). Do not blindly prefer the
+        # raw candidate -- that caused live readings such as
+        # 53 -> 391 -> 251 -> 11 instead of 53 -> 39 -> 25 -> 11.
+        candidates = []
+        for candidate_text in (prefix_digits, prefix_digits[:-1]):
+            if not candidate_text:
                 continue
-            current = int(candidate)
-            if current <= self._last_known_max:
-                return GaugeReading(current=current, maximum=self._last_known_max)
-        return None
+            candidate = int(candidate_text)
+            if candidate <= self._last_known_max and candidate not in candidates:
+                candidates.append(candidate)
+
+        if not candidates or self._last_known_current is None:
+            # Without a previous clean reading there is no safe way to
+            # distinguish a real three-digit current from current + a
+            # slash misread as "1". Dropping this tick is safer than
+            # manufacturing a plausible but dangerously wrong value.
+            return None
+
+        current = min(candidates, key=lambda value: abs(value - self._last_known_current))
+        self._last_known_current = current
+        return GaugeReading(current=current, maximum=self._last_known_max)

@@ -98,6 +98,10 @@ chat:
 roi_skill:
   template: templates/roi_skill.png
   match_threshold: 0.4
+  # The quick-slot panel is fixed at the bottom-right. Restricting the
+  # search prevents low-threshold whole-panel matching from accepting a
+  # similarly textured patch in the game world.
+  search_region: {left: 0.70, top: 0.65, right: 1.0, bottom: 1.0}
 
 # Active-buff column (top-right of screen). Its content changes a lot
 # (whatever buffs happen to be active), so unlike hp/mp/roi_skill its
@@ -213,6 +217,13 @@ location:
   template: templates/roi_location_anchor.png
   match_threshold: 0.75
   content_offset: {left: -8, top: -92, width: 300, height: 40}
+  # Fixed location labels use the game's tiny outlined font, which the
+  # general Korean OCR model does not recognize reliably. Verify this
+  # known destination visually inside content_offset instead.
+  target_template: templates/location_wasteland.png
+  target_match_threshold: 0.85
+  verify_timeout_seconds: 6.0
+  verify_interval_seconds: 0.5
 
 # HP/MP trigger conditions. Each fires its `key` when the matching gauge
 # is at or below `threshold_percent` -- but not more often than once per

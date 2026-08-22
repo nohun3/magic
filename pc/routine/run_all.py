@@ -56,7 +56,10 @@ def main() -> None:
     project_root = _PROJECT_ROOT
 
     roi_skill_cfg = settings["roi_skill"]
-    skill_panel = SkillPanelLocator(project_root / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"])
+    skill_panel = SkillPanelLocator(
+        project_root / roi_skill_cfg["template"], roi_skill_cfg["match_threshold"],
+        roi_skill_cfg.get("search_region"),
+    )
 
     print("Loading OCR models (Korean dialog + HP/MP gauge)...")
     korean_reader = KoreanTextReader()
@@ -95,7 +98,7 @@ def main() -> None:
                 cycle += 1
                 print(f"\n===== 사이클 {cycle}: [3단계] 버려진땅 이동 =====")
                 ok = step3.run(settings, project_root, window_title, link, skill_panel,
-                                wasteland_text, gate_dest_text, step_forward_text, ScreenCapture)
+                                wasteland_text, gate_dest_text, step_forward_text, korean_reader, ScreenCapture)
                 if not ok:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
                     sys.exit(1)
