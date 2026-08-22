@@ -82,13 +82,6 @@ HEEL_KEY_INTERVAL_S = 0.12
 # survive that, a genuine MP crash will.
 MP_EXIT_CONSECUTIVE_TICKS = 2
 
-# Skip [2단계] entirely when MP is already full, but require two
-# consecutive readings because live OCR occasionally produces a single
-# implausible spike. This prevents wasting a hotel teleport/meditation
-# while still avoiding a false skip from one bad frame.
-MP_FULL_SKIP_CONSECUTIVE_READS = 2
-MP_FULL_SKIP_CONFIRM_INTERVAL_S = 0.2
-
 # MP naturally holds steady/ticks sideways by a point or two between
 # reads even while ATS is actively fighting (OCR/timing noise, a skill
 # that happened to cost 0 this exact tick, etc.) -- reacting to a single
@@ -340,30 +333,6 @@ def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_ca
         time.sleep(poll_interval_s)
 
 
-def _are_hp_mp_ready(hp_detector, mp_detector, window_title: str, screen_capture_cls,
-                     mp_ready_percent: float) -> bool:
-    for check in range(1, MP_FULL_SKIP_CONSECUTIVE_READS + 1):
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        hp_result = hp_detector.measure(frame)
-        mp_result = mp_detector.measure(frame)
-        if hp_result is None or mp_result is None:
-            print(f"  HP/MP pre-check {check}/{MP_FULL_SKIP_CONSECUTIVE_READS}: unreadable -- running [2단계]")
-            return False
-        hp = hp_result.reading
-        mp = mp_result.reading
-        print(
-            f"  HP/MP pre-check {check}/{MP_FULL_SKIP_CONSECUTIVE_READS}: "
-            f"HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  "
-            f"MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%)"
-        )
-        if hp.current < hp.maximum or mp.percent < mp_ready_percent:
-            return False
-        if check < MP_FULL_SKIP_CONSECUTIVE_READS:
-            time.sleep(MP_FULL_SKIP_CONFIRM_INTERVAL_S)
-    return True
-
-
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
                   hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
                   screen_capture_cls, force_run: bool = False) -> bool:
@@ -371,20 +340,18 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     present in roi_skill (the 4-hour room rental can expire mid-loop, so
     this precondition is re-checked every time, not just once at
     startup) -- then waits for HP 100% and the configured MP readiness
-    percentage before returning. When force_run is True, the HP/MP
-    readiness shortcut is bypassed and the actual hotel movement in
-    [2단계] always runs.
+    percentage before returning. The recovery action always runs on
+    entry; already-full HP/MP no longer skips the meditation cast.
     Shared by run()'s MP<=5% handoff below and
     pc/routine/run_all.py's initial entry point, so both go through
     the exact same "ensure the precondition, run [2단계], wait for full
     MP" sequence the user specified."""
     import pc.routine.step_buy_hotel_key as step1
     import pc.routine.step_move_to_hotel as step2
-    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 95.0))
+    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
 
     # The hotel key is a persistent precondition for every [2단계]
-    # entry, independent of current MP. Check it before the readiness
-    # shortcut so a full gauge cannot bypass an expired/missing key.
+    # entry, independent of current MP.
     with screen_capture_cls(window_title=window_title) as cap:
         frame = cap.grab()
     hotel_key = build_icon_detector(
@@ -400,24 +367,13 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
             print("  [1단계] failed.")
             return False
 
-    if force_run:
-        print("  forced [2단계] recovery -- ignoring HP/MP readiness shortcut")
-        gauges_ready = False
-    else:
-        gauges_ready = _are_hp_mp_ready(
-            hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
-        )
-
-    if not gauges_ready:
-        ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
-        if not ok:
-            print("  [2단계] failed.")
-            return False
-        _wait_for_ready_hp_mp(
-            hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
-        )
-    else:
-        print(f"  HP 100% and MP >= {mp_ready_percent:.0f}% on consecutive checks -- skipping [2단계] meditation")
+    ok = step2.run(settings, project_root, window_title, link, skill_panel, mp_detector, screen_capture_cls)
+    if not ok:
+        print("  [2단계] failed.")
+        return False
+    _wait_for_ready_hp_mp(
+        hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
+    )
 
     step2.ensure_mana(
         settings, project_root, link, skill_panel, window_title, screen_capture_cls

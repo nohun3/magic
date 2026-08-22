@@ -312,7 +312,7 @@ dialog:
 
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
-  mp_ready_percent: 95.0
+  mp_ready_percent: 97.0
 
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
