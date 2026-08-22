@@ -87,7 +87,7 @@ def main() -> None:
             link.poll_acks()
 
             print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> MP 100% 대기) ===")
-            ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, mp_detector,
+            ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                                      hotel_text, rent_room_text, ok_button_text, ScreenCapture)
             if not ok:
                 print("[stop] 초기 진입 실패.")
@@ -97,9 +97,24 @@ def main() -> None:
             while True:
                 cycle += 1
                 print(f"\n===== 사이클 {cycle}: [3단계] 버려진땅 이동 =====")
-                ok = step3.run(settings, project_root, window_title, link, skill_panel,
-                                wasteland_text, gate_dest_text, step_forward_text, korean_reader, ScreenCapture)
-                if not ok:
+                step3_result = step3.run(
+                    settings, project_root, window_title, link, skill_panel,
+                    wasteland_text, gate_dest_text, step_forward_text, korean_reader,
+                    ScreenCapture, hp_detector=hp_detector,
+                )
+                if step3_result is None:
+                    print("[3단계] recovery requested -> running [2단계]")
+                    ok = step4.ensure_step2(
+                        settings, project_root, window_title, link, skill_panel,
+                        hp_detector, mp_detector, hotel_text, rent_room_text,
+                        ok_button_text, ScreenCapture,
+                    )
+                    if not ok:
+                        print(f"[stop] cycle {cycle}: emergency [2단계] failed.")
+                        sys.exit(1)
+                    cycle -= 1
+                    continue
+                if not step3_result:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
                     sys.exit(1)
 
@@ -114,7 +129,5 @@ def main() -> None:
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n[stopped] Ctrl+C")
-
-
 if __name__ == "__main__":
     main()

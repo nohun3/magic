@@ -202,6 +202,12 @@ npcs:
     # a threshold safely between the two clusters rather than the
     # fully-rendered 0.85.
     match_threshold: 0.35
+    # If the full template is not found, also compare the visible part
+    # of a gate clipped by the game-frame edges. Partial matching is
+    # restricted to the four edges/corners to limit false positives.
+    partial_match_threshold: 0.5
+    partial_min_visible_fraction: 0.5
+    partial_scan_step_px: 2
 
 # Current location name (e.g. "오렌 마을", "버림받은 자들의 땅"), shown
 # top-left of the character-stat panel -- only visible outdoors (indoors/
@@ -297,6 +303,11 @@ dialog:
   template: templates/roi_dialog_border.png
   match_threshold: 0.75
   content_offset: {left: -365, top: 35, width: 432, height: 535}
+
+# Safety handoff while moving to the hunting area. Step 3 is aborted
+# immediately and Step 2 is forced even if MP is already full.
+step3:
+  hp_exit_percent: 30.0
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have

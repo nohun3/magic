@@ -1,7 +1,7 @@
 """[3단계] 버려진땅 이동.
 
 1. roi_skill에서 icon_teleport_scroll 더블클릭 -> 텔레포트 목록 대화창(dialog) 오픈
-2. dialog 영역에서 "* [오렌] 버려진땅" 텍스트를 더블클릭
+2. dialog 영역에서 "* [오렌] 버땅" 텍스트를 더블클릭
 3. npc_teleport_gate 이미지와 가장 비슷한 부분(월드 공간, 화면 전체 검색)을 원클릭
 4. 3번이 여는 새 dialog(같은 generic dialog 프레임, 다른 내용)에서 "버림받은 자들의
    땅" 텍스트의 랜덤한 부분을 원클릭
@@ -68,7 +68,7 @@ from pc.detector.window_content import ContentOffset, WindowContentLocator  # no
 from pc.detector.chat_reader import KoreanTextReader, needles_match_fn  # noqa: E402
 from pc.detector.remembered_text import RememberedDialogText, first_matching  # noqa: E402
 from pc.detector.color_mask import mask_non_yellow  # noqa: E402
-from pc.detector.template_locator import locate_template  # noqa: E402
+from pc.detector.template_locator import MatchResult, locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
@@ -81,7 +81,7 @@ DIALOG_OPEN_SETTLE_S = 0.6
 # teleport gate has finished rendering in the world.
 GATE_RENDER_SETTLE_S = 0.8
 
-WASTELAND_NEEDLES = ("오렌", "버려진땅")
+WASTELAND_NEEDLES = ("오렌", "버땅")
 STEP_FORWARD_NEEDLES = ("발을", "내딛는다")
 
 GATE_DESTINATION_NEEDLE = "버림받은"
@@ -209,8 +209,32 @@ def save_location_debug_crop(content_locator: WindowContentLocator, frame: np.nd
     return path
 
 
+def save_gate_preclick_frame(frame: np.ndarray, output_dir: Path, attempt: int,
+                             gate_match: MatchResult) -> Optional[Path]:
+    """Save the raw game-client frame immediately before a gate click.
+
+    Coordinates and match score are kept in the filename so a later
+    false-positive analysis can associate the screenshot with the log.
+    A debug-write failure must not interfere with the live routine.
+    """
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        region = gate_match.region
+        score = int(round(gate_match.score * 1000))
+        path = output_dir / (
+            f"gate_preclick_{timestamp_ms}_attempt{attempt:02d}_"
+            f"score{score:04d}_x{region.left}_y{region.top}.png"
+        )
+        if not cv2.imwrite(str(path), frame):
+            return None
+        return path
+    except (OSError, cv2.error):
+        return None
+
+
 def build_wasteland_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
-    """"* [오렌] 버려진땅" inside the icon_teleport_scroll dialog."""
+    """"* [오렌] 버땅" inside the icon_teleport_scroll dialog."""
     content_locator = _build_dialog_content_locator(settings, project_root)
     return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*WASTELAND_NEEDLES)))
 
@@ -231,7 +255,7 @@ def build_gate_destination_text_locator(settings: dict, project_root: Path, read
 
     cache=False: this follows a low-confidence npc_teleport_gate click
     (a template match that can land on a false positive -- confirmed
-    live, see GATE_MIN_TOP_PX below). A stale dialog left over from an
+    live). A stale dialog left over from an
     earlier step can still satisfy the generic border-anchor match, so
     trusting a cached offset here risks reporting "found" against the
     wrong dialog entirely instead of correctly reporting "not found".
@@ -264,14 +288,87 @@ def open_teleport_dialog(link: SerialLink, converter: FrameToMouseConverter, ico
     return double_click_region(link, converter, icon_region)
 
 
+def _partial_gate_match(frame: np.ndarray, template: np.ndarray, threshold: float,
+                        min_visible_fraction: float, scan_step_px: int) -> Optional[MatchResult]:
+    """Match the visible part of a gate clipped by a frame edge.
+
+    Partial templates are compared only flush against the corresponding
+    screen edge.  This avoids accepting an arbitrary fragment in the
+    middle of the game world.  The returned region is only the visible
+    intersection, so its center is always a valid click coordinate.
+    """
+    fh, fw = frame.shape[:2]
+    th, tw = template.shape[:2]
+    min_h = max(2, int(round(th * min_visible_fraction)))
+    min_w = max(2, int(round(tw * min_visible_fraction)))
+    step = max(1, scan_step_px)
+    candidates: List[MatchResult] = []
+
+    def remember(image: np.ndarray, needle: np.ndarray, left_offset: int, top_offset: int) -> None:
+        ih, iw = image.shape[:2]
+        nh, nw = needle.shape[:2]
+        if ih < nh or iw < nw:
+            return
+        result = cv2.matchTemplate(image, needle, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(result)
+        if score >= threshold:
+            candidates.append(MatchResult(
+                region=Region(left=left_offset + location[0], top=top_offset + location[1],
+                              width=nw, height=nh),
+                score=float(score),
+            ))
+
+    visible_heights = list(range(min_h, min(th, fh), step))
+    visible_widths = list(range(min_w, min(tw, fw), step))
+
+    # Gate extends beyond the top or bottom edge; horizontal position is unknown.
+    for visible_h in visible_heights:
+        remember(frame[:visible_h, :], template[th - visible_h:, :], 0, 0)
+        remember(frame[fh - visible_h:, :], template[:visible_h, :], 0, fh - visible_h)
+
+    # Gate extends beyond the left or right edge; vertical position is unknown.
+    for visible_w in visible_widths:
+        remember(frame[:, :visible_w], template[:, tw - visible_w:], 0, 0)
+        remember(frame[:, fw - visible_w:], template[:, :visible_w], fw - visible_w, 0)
+
+    if candidates:
+        return max(candidates, key=lambda match: match.score)
+
+    # A gate can be clipped by two edges at a corner. Coarser combinations
+    # keep this fallback inexpensive while still covering varying exposure.
+    corner_step = max(step, 4)
+    for visible_h in range(min_h, min(th, fh), corner_step):
+        for visible_w in range(min_w, min(tw, fw), corner_step):
+            corner_specs = (
+                (frame[:visible_h, :visible_w], template[th - visible_h:, tw - visible_w:], 0, 0),
+                (frame[:visible_h, fw - visible_w:], template[th - visible_h:, :visible_w], fw - visible_w, 0),
+                (frame[fh - visible_h:, :visible_w], template[:visible_h, tw - visible_w:], 0, fh - visible_h),
+                (frame[fh - visible_h:, fw - visible_w:], template[:visible_h, :visible_w], fw - visible_w, fh - visible_h),
+            )
+            for image, needle, left, top in corner_specs:
+                remember(image, needle, left, top)
+
+    return max(candidates, key=lambda match: match.score, default=None)
+
+
 def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
-    """Plain unscoped template match for npc_teleport_gate.png -- a
-    world-space object, not a UI icon, so no panel to scope the search
-    to (see module docstring). Returns a template_locator.MatchResult or
-    None."""
+    """Find a full gate, then fall back to a gate clipped by a frame edge."""
     gate_cfg = settings["npcs"]["teleport_gate"]
     template = cv2.imread(str(project_root / gate_cfg["template"]))
-    return locate_template(frame, template, gate_cfg.get("match_threshold", 0.85))
+    if template is None:
+        raise FileNotFoundError(f"Could not load gate template: {project_root / gate_cfg['template']}")
+
+    full_match = locate_template(frame, template, gate_cfg.get("match_threshold", 0.85))
+    if full_match is not None:
+        return full_match
+
+    return _partial_gate_match(
+        frame,
+        template,
+        float(gate_cfg.get("partial_match_threshold", 0.5)),
+        float(gate_cfg.get("partial_min_visible_fraction", 0.5)),
+        int(gate_cfg.get("partial_scan_step_px", 2)),
+    )
 
 
 # npc_teleport_gate sits out in the open world, where a monster can walk
@@ -282,65 +379,38 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
 # in advance, so instead of trying to prevent it, this retries: after
 # each click, verify the destination dialog actually opened (that's
 # what gate_dest_text.find() below is for) -- if not, assume the click
-# missed the gate and just try again with a freshly relocated gate
-# (the monster may have moved on by then). A click that lands on a
-# hostile monster can aggro it, so before every retry (not the first
-# attempt) retreat_from_gate() below walks the character a few steps
-# away first -- unconditionally, with no monster/combat detection
-# involved (there isn't one in this project yet): cheaper and safer to
-# always take one retreat step before a retry than to risk staying put
-# next to whatever might have just been clicked.
+# missed the gate and just try again with a fresh frame (the monster
+# may have moved on by then). Retries deliberately do not move the
+# character because that changes the scene and can obstruct detection.
 GATE_CLICK_MAX_ATTEMPTS = 3
+GATE_RETRY_INTERVAL_S = 0.5
 
-# The gate has never legitimately rendered this close to the top edge
-# across every live run so far (always somewhere out in the mid-frame
-# snow field) -- confirmed live that a low-confidence match up here
-# (score 0.465, just over the 0.35 threshold, at top=0) is a false
-# positive, not the gate. Treated the same as "no match" below so it
-# triggers a retreat-and-retry instead of a wasted click.
-GATE_MIN_TOP_PX = 20
-
-# Fraction of the frame's height/width to click when retreating -- the
-# camera follows the character, so a fixed point below-center of the
-# frame reliably lands a few steps "south" of wherever the character
-# currently is without needing to know its exact on-screen position.
-# 0.65 is chosen to stay clear of the bottom HUD (roughly y > 0.77 of
-# the frame in this project's captures).
-RETREAT_CLICK_Y_FRACTION = 0.65
-RETREAT_SETTLE_S = 1.5
-
-
-def retreat_from_gate(link: SerialLink, converter: FrameToMouseConverter) -> bool:
-    """Blind, unconditional single-click a few steps "south" of the
-    character (see RETREAT_CLICK_Y_FRACTION) to create some distance
-    before retrying a gate click that apparently missed -- Option A from
-    the conversation this was designed in: no monster/combat detection,
-    just always retreat one step before a retry, whether or not
-    anything actually attacked."""
-    fx = converter.frame_width * 0.5
-    fy = converter.frame_height * RETREAT_CLICK_Y_FRACTION
-    ux, uy = converter.convert(fx, fy)
-
-    move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
-    if move_ack is None or not move_ack.ok:
-        return False
-    time.sleep(0.15)
-    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    return click_ack is not None and click_ack.ok
-
-
-# Default jitter for click_region_once()/double_click_region()-style
-# helpers -- a random point within +/-35% of the region's center. Fine
-# for text (the whole box is readable/clickable) but NOT for NPC/object
-# sprite regions (npc_hotel_manager, npc_teleport_gate): the template
+# OCR text boxes are clicked at their exact center. NPC/object sprite
+# regions (npc_hotel_manager, npc_teleport_gate) still use a small
+# explicit random range because the template
 # crop's bounding box often includes background margin around the
 # actual silhouette (counter, floor, snow...), so a wide-range random
 # click can land off the character/object entirely and silently miss
 # the interaction -- confirmed live (NPC dialogue repeatedly failed to
 # open; the click had landed just outside the sprite). Use
 # SPRITE_CLICK_JITTER for those instead.
-TEXT_CLICK_JITTER = 0.35
+TEXT_CLICK_JITTER = 0.0
 SPRITE_CLICK_JITTER = 0.1
+
+
+def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: float) -> bool:
+    if hp_detector is None:
+        return False
+    result = hp_detector.measure(frame)
+    if result is None:
+        print("  [3단계 HP] unreadable -- continuing this checkpoint")
+        return False
+    hp = result.reading
+    print(f"  [3단계 HP] {hp.current}/{hp.maximum} ({hp.percent:.1f}%)")
+    if hp.percent <= threshold_percent:
+        print(f"  [3단계 HP] <= {threshold_percent:.0f}% -- handoff to [2단계]")
+        return True
+    return False
 
 
 def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region: Region, jitter: float = TEXT_CLICK_JITTER) -> bool:
@@ -360,17 +430,41 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
     return True
 
 
+def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
+                             region: Region) -> bool:
+    """Double-click the exact center of an OCR-recognized text box."""
+    fx = region.left + region.width * 0.5
+    fy = region.top + region.height * 0.5
+    ux, uy = converter.convert(fx, fy)
+
+    move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
+    if move_ack is None or not move_ack.ok:
+        return False
+    time.sleep(0.15)
+    click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click1 is None or not click1.ok:
+        return False
+    time.sleep(0.12)
+    click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click2 is None or not click2.ok:
+        return False
+    time.sleep(0.1)
+    park_cursor(link, converter)
+    return True
+
+
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         wasteland_text: RememberedDialogText, gate_dest_text: RememberedDialogText, step_forward_text: RememberedDialogText,
-        reader: KoreanTextReader, screen_capture_cls) -> bool:
+        reader: KoreanTextReader, screen_capture_cls, hp_detector=None) -> Optional[bool]:
     """Full [3단계]: the 5 sub-actions from the module docstring plus a
     final location check, as a reusable function (for
     pc/routine/run_all.py) instead of a script entry point. Takes
     pre-built RememberedDialogText locators so their OCR caches persist
     across repeated calls in a long-running loop instead of resetting
-    every process invocation. Returns False as soon as any sub-action
-    fails to find its target or ACK (including the gate-click retry
-    loop exhausting its attempts, or the location never confirming)."""
+    every process invocation. Returns None when recovery through
+    [2단계] is needed (critical HP or all gate attempts exhausted), and
+    False when another sub-action fails or the location never confirms."""
+    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 30.0))
     print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
         print("[stop] F2 keypress not ACKed")
@@ -380,6 +474,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     park_cursor(link, converter)
     time.sleep(0.2)
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+        return None
     scroll = locate_teleport_scroll(settings, project_root, frame, skill_panel)
     print(f"  teleport_scroll: present={scroll.present} score={scroll.match_score:.3f} region={scroll.region}")
     if not scroll.present:
@@ -393,14 +489,16 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
     time.sleep(DIALOG_OPEN_SETTLE_S)
 
-    print("[2/6] finding '* [오렌] 버려진땅' text...")
+    print("[2/6] finding '* [오렌] 버땅' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+        return None
     target = wasteland_text.find(frame)
     print(f"  target region: {target}")
     if target is None:
-        print("[stop] '오렌'+'버려진땅' text not found -- is the dialog open?")
+        print("[stop] '오렌'+'버땅' text not found -- is the dialog open?")
         return False
-    ok = double_click_region(link, converter, target)
+    ok = double_click_text_center(link, converter, target)
     print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
         return False
@@ -412,10 +510,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     dest_target = None
     for attempt in range(1, GATE_CLICK_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+            return None
         gate_match = locate_teleport_gate(settings, project_root, frame)
-        if gate_match is not None and gate_match.region.top < GATE_MIN_TOP_PX:
-            print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: rejecting match too close to the top edge (top={gate_match.region.top}px < {GATE_MIN_TOP_PX}px, score={gate_match.score:.3f}) -- treating as a false positive")
-            gate_match = None
         if gate_match is None:
             # Also print the best score even below threshold, for
             # calibrating match_threshold live. Treated the same
@@ -429,7 +526,22 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             best = locate_template(frame, template, 0.0)
             print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: no match >= threshold (best score below threshold: {best.score:.3f} @ {best.region})")
         else:
-            print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: teleport_gate region={gate_match.region} score={gate_match.score:.3f}")
+            gate_cfg = settings["npcs"]["teleport_gate"]
+            gate_template = cv2.imread(str(project_root / gate_cfg["template"]))
+            is_partial = (
+                gate_template is not None
+                and (gate_match.region.width < gate_template.shape[1]
+                     or gate_match.region.height < gate_template.shape[0])
+            )
+            match_kind = "partial edge match" if is_partial else "full match"
+            print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: teleport_gate region={gate_match.region} score={gate_match.score:.3f} ({match_kind})")
+            debug_path = save_gate_preclick_frame(
+                frame, project_root / "output" / "gate_preclick", attempt, gate_match
+            )
+            if debug_path is not None:
+                print(f"    saved pre-click game frame: {debug_path}")
+            else:
+                print("    [warn] failed to save pre-click game frame")
             ok = click_region_once(link, converter, gate_match.region, jitter=SPRITE_CLICK_JITTER)
             print(f"    click -> {'ok' if ok else 'FAILED (missing ACK)'}")
             if not ok:
@@ -439,6 +551,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             time.sleep(DIALOG_OPEN_SETTLE_S)
 
             frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+            if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+                return None
             dest_target = gate_dest_text.find(frame)
             if dest_target is not None:
                 print(f"    destination dialog found: {dest_target}")
@@ -446,15 +560,13 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             print("    '버림받은 자들의 땅' not found -- click likely missed the gate (e.g. a monster overlapping it)")
 
         if attempt < GATE_CLICK_MAX_ATTEMPTS:
-            print("    retreating before retry...")
-            retreat_ok = retreat_from_gate(link, converter)
-            print(f"    retreat click -> {'ok' if retreat_ok else 'FAILED (missing ACK)'}")
-            time.sleep(RETREAT_SETTLE_S)
+            print(f"    waiting {GATE_RETRY_INTERVAL_S}s before stationary retry...")
+            time.sleep(GATE_RETRY_INTERVAL_S)
 
     print("[4/6] clicking '버림받은 자들의 땅' (exact, not '...심연')...")
     if dest_target is None:
-        print(f"[stop] destination dialog never opened after {GATE_CLICK_MAX_ATTEMPTS} attempts.")
-        return False
+        print(f"[3단계] gate not found/opened after {GATE_CLICK_MAX_ATTEMPTS} attempts -- handoff to [2단계]")
+        return None
     ok = click_region_once(link, converter, dest_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
@@ -465,6 +577,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
 
     print("[5/6] finding '발을 내딛는다' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+        return None
     forward_target = step_forward_text.find(frame)
     print(f"  target region: {forward_target}")
     if forward_target is None:
@@ -488,6 +602,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         time.sleep(verify_interval_s)
         attempt += 1
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+            return None
         location_result = measure_wasteland_location(location_content_locator, location_detector, frame)
         print(f"  location check {attempt}: present={location_result.present} score={location_result.match_score:.3f}")
         if location_result.present:
