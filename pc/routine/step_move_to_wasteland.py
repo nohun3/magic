@@ -436,6 +436,25 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
     return True
 
 
+def click_frame_ratio_once(link: SerialLink, converter: FrameToMouseConverter,
+                           x_ratio: float, y_ratio: float) -> bool:
+    """Click one configurable point expressed as a ratio of the game frame."""
+    fx = converter.frame_width * min(max(x_ratio, 0.0), 1.0)
+    fy = converter.frame_height * min(max(y_ratio, 0.0), 1.0)
+    ux, uy = converter.convert(fx, fy)
+
+    move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
+    if move_ack is None or not move_ack.ok:
+        return False
+    time.sleep(0.15)
+    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click_ack is None or not click_ack.ok:
+        return False
+    time.sleep(0.1)
+    park_cursor(link, converter)
+    return True
+
+
 def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
                              region: Region) -> bool:
     """Double-click the exact center of an OCR-recognized text box."""
@@ -470,7 +489,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     every process invocation. Returns None when recovery through
     [2단계] is needed (critical HP or all gate attempts exhausted), and
     False when another sub-action fails or the location never confirms."""
-    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 30.0))
+    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
+    gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
+    gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
         print("[stop] F2 keypress not ACKed")
@@ -520,6 +541,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             return None
         gate_match = locate_teleport_gate(settings, project_root, frame)
         if gate_match is None:
+            # A previous gate click may already have opened the destination
+            # dialog while the gate itself disappeared behind it.  Do not
+            # blindly click the upper part of the game in that state: the
+            # fallback click can hit the dialog and close/select something.
+            dest_target = gate_dest_text.find(frame)
+            if dest_target is not None:
+                print(f"    destination dialog already open: {dest_target}")
+                break
+
             # Also print the best score even below threshold, for
             # calibrating match_threshold live. Treated the same
             # as "clicked but destination dialog didn't open"
@@ -538,6 +568,16 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 print(f"    saved gate-failure game frame: {failure_path}")
             else:
                 print("    [warn] failed to save gate-failure game frame")
+            clicked = click_frame_ratio_once(
+                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio
+            )
+            print(
+                f"    gate and destination dialog missing: clicked upper-center "
+                f"({gate_miss_click_x_ratio:.2f}, {gate_miss_click_y_ratio:.2f}) "
+                f"-> {'ok' if clicked else 'FAILED (missing ACK)'}"
+            )
+            if not clicked:
+                return False
         else:
             gate_cfg = settings["npcs"]["teleport_gate"]
             gate_template = cv2.imread(str(project_root / gate_cfg["template"]))

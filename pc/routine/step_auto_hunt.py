@@ -374,10 +374,6 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     _wait_for_ready_hp_mp(
         hp_detector, mp_detector, window_title, screen_capture_cls, mp_ready_percent
     )
-
-    step2.ensure_mana(
-        settings, project_root, link, skill_panel, window_title, screen_capture_cls
-    )
     return True
 
 

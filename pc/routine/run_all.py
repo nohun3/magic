@@ -45,7 +45,11 @@ import pc.routine.step_move_to_wasteland as step3  # noqa: E402
 import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 
-def main() -> None:
+DEFAULT_RESTART_DELAY_S = 5.0
+
+
+def _run_once() -> float:
+    """Run one session; ordinary failures return to the supervisor."""
     from pc.config.config_loader import load_settings
     from pc.capture.screen_capture import ScreenCapture
     from pc.capture.window_locator import WindowNotFoundError
@@ -54,6 +58,9 @@ def main() -> None:
     settings = load_settings()
     window_title = settings["capture"]["window_title"]
     project_root = _PROJECT_ROOT
+    restart_delay_s = float(
+        settings.get("routine", {}).get("restart_delay_seconds", DEFAULT_RESTART_DELAY_S)
+    )
 
     roi_skill_cfg = settings["roi_skill"]
     skill_panel = SkillPanelLocator(
@@ -91,7 +98,7 @@ def main() -> None:
                                      hotel_text, rent_room_text, ok_button_text, ScreenCapture)
             if not ok:
                 print("[stop] 초기 진입 실패.")
-                sys.exit(1)
+                return restart_delay_s
 
             cycle = 0
             while True:
@@ -111,23 +118,39 @@ def main() -> None:
                     )
                     if not ok:
                         print(f"[stop] cycle {cycle}: emergency [2단계] failed.")
-                        sys.exit(1)
+                        return restart_delay_s
                     cycle -= 1
                     continue
                 if not step3_result:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
-                    sys.exit(1)
+                    return restart_delay_s
 
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
                 ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                                 hotel_text, rent_room_text, ok_button_text, ScreenCapture)
                 if not ok:
                     print(f"[stop] 사이클 {cycle}: [4단계] (또는 그 안의 다음 사이클 진입) 실패.")
-                    sys.exit(1)
+                    return restart_delay_s
     except WindowNotFoundError as e:
         print(f"[error] {e}")
-        sys.exit(1)
+        return restart_delay_s
+
+
+def main() -> None:
+    """Restart failed sessions until the user explicitly presses Ctrl+C."""
+    try:
+        while True:
+            restart_delay_s = DEFAULT_RESTART_DELAY_S
+            try:
+                restart_delay_s = _run_once()
+            except Exception as e:
+                print(f"[recovery] unexpected {type(e).__name__}: {e}")
+            print(
+                f"[recovery] restarting from the Step 2 entry precondition "
+                f"in {restart_delay_s:.1f}s..."
+            )
+            time.sleep(max(0.1, restart_delay_s))
     except KeyboardInterrupt:
-        print("\n[stopped] Ctrl+C")
+        print("\n[stopped] user requested Ctrl+C")
 if __name__ == "__main__":
     main()

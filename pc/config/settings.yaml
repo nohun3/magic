@@ -317,7 +317,13 @@ step2:
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
 step3:
-  hp_exit_percent: 30.0
+  hp_exit_percent: 50.0
+  gate_miss_click_x_ratio: 0.50
+  gate_miss_click_y_ratio: 0.20
+
+# Failed steps restart from the Step 2 entry precondition instead of terminating.
+routine:
+  restart_delay_seconds: 5.0
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have

@@ -316,19 +316,25 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     else:
         if not ensure_skill_tab(link):
             print("  [warn] meditation F2 tab switch failed -- continuing without meditation")
-            return True
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
-        if not meditation.present or meditation.region is None:
-            print("  [warn] meditation icon not present -- continuing without meditation")
-            return True
-        if not double_click_region(link, converter, meditation.region):
-            print("  [warn] meditation double-click was not ACKed -- continuing without meditation")
-            return True
+        else:
+            frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+            meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
+            if not meditation.present or meditation.region is None:
+                print("  [warn] meditation icon not present -- continuing without meditation")
+            elif not double_click_region(link, converter, meditation.region):
+                print("  [warn] meditation double-click was not ACKed -- continuing without meditation")
+            elif not _verify_and_retry_meditation(
+                settings, project_root, link, skill_panel, mp_detector,
+                window_title, screen_capture_cls,
+            ):
+                print("  [warn] meditation buff could not be confirmed -- continuing without meditation")
 
-        if not _verify_and_retry_meditation(settings, project_root, link, skill_panel, mp_detector, window_title, screen_capture_cls):
-            print("  [warn] meditation buff could not be confirmed -- continuing without meditation")
-            return True
+    # Mana belongs to the beginning of Step 2: check/activate it directly
+    # after the meditation action, before the HP/MP readiness wait.
+    ensure_mana(
+        settings, project_root, link, skill_panel, window_title,
+        screen_capture_cls,
+    )
 
     return True
 

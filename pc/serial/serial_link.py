@@ -89,9 +89,17 @@ class SerialLink:
         return None
 
     def close(self) -> None:
+        # Best-effort safety reset before closing: clear the firmware queue
+        # and release every held keyboard key and mouse button.
+        if self._serial.is_open:
+            try:
+                self.send_and_wait("STOP", timeout=0.5)
+            except (serial.SerialException, OSError):
+                pass
         self._stop_event.set()
         self._reader_thread.join(timeout=2.0)
-        self._serial.close()
+        if self._serial.is_open:
+            self._serial.close()
 
     def __enter__(self) -> "SerialLink":
         return self
