@@ -226,8 +226,8 @@ def press_heel_key(link: SerialLink) -> bool:
     return ok
 
 
-def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
-                      hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
+def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
+                           hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
     """Runs the 1-second monitoring loop until MP <= MP_EXIT_PERCENT for
     MP_EXIT_CONSECUTIVE_TICKS ticks in a row (or MAX_TICKS is hit, as a
     safety fallback). Returns True if it's time to
@@ -356,9 +356,29 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
     return False
 
 
-def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_capture_cls,
-                          mp_ready_percent: float,
-                          poll_interval_s: float = MONITOR_INTERVAL_S) -> None:
+def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
+                     hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
+    """Time the complete Step 4 combat monitor, including abnormal exits."""
+    started_at = time.monotonic()
+    print("  [4단계 시간] 전투 시간 측정 시작")
+    try:
+        return _monitor_and_hunt_impl(
+            link, settings, project_root, skill_panel, hp_detector, mp_detector,
+            window_title, screen_capture_cls,
+        )
+    finally:
+        elapsed = time.monotonic() - started_at
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        print(
+            f"  [4단계 시간] 총 전투시간: {elapsed:.1f}초 "
+            f"({hours:02d}:{minutes:02d}:{seconds:02d})"
+        )
+
+
+def _wait_for_ready_hp_mp_impl(hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                               mp_ready_percent: float,
+                               poll_interval_s: float = MONITOR_INTERVAL_S) -> None:
     """Poll until HP is full and MP reaches the configured readiness level --
     meditation (from [2단계]) doesn't complete instantly, and the user's
     design has [3단계] only start once both gauges are ready. A None
@@ -379,6 +399,22 @@ def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_ca
                 return
             print(f"    HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%) -- 대기...")
         sleep_jittered(poll_interval_s)
+
+
+def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                          mp_ready_percent: float,
+                          poll_interval_s: float = MONITOR_INTERVAL_S) -> None:
+    """Time the complete Step 2 HP/MP readiness wait."""
+    started_at = time.monotonic()
+    print("  [2단계 시간] HP/MP 준비 대기시간 측정 시작")
+    try:
+        _wait_for_ready_hp_mp_impl(
+            hp_detector, mp_detector, window_title, screen_capture_cls,
+            mp_ready_percent, poll_interval_s,
+        )
+    finally:
+        elapsed = time.monotonic() - started_at
+        print(f"  [2단계 시간] 총 대기시간: {elapsed:.1f}초")
 
 
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,

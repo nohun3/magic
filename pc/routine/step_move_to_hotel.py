@@ -75,6 +75,11 @@ TELEPORT_SETTLE_S = 1.5
 MEDITATION_RETRY_MIN_MP = 10
 MP_POLL_INTERVAL_S = 1.0
 
+# Registered once by run_all after roi_chatting is located. All shared click
+# helpers then park the cursor at a fresh random point in this region instead
+# of repeatedly moving it to the game field's upper centre.
+_cursor_park_region: Region | None = None
+
 
 # After the hotel_key double-click, press ESC this many times (picked
 # fresh each call) -- per the user's request, to clear out whatever
@@ -125,6 +130,11 @@ def ensure_skill_tab(link: SerialLink) -> bool:
     return True
 
 
+def set_cursor_park_region(region: Region) -> None:
+    global _cursor_park_region
+    _cursor_park_region = region
+
+
 def park_cursor(link: SerialLink, converter: FrameToMouseConverter) -> bool:
     """Move the cursor to a neutral point in the open game world (clear
     of hotbars/buff column/chat), so it doesn't sit on top of whatever
@@ -133,8 +143,18 @@ def park_cursor(link: SerialLink, converter: FrameToMouseConverter) -> bool:
     over the icon itself, which looks like a UI change and throws off
     template matching -- see the conversation this was found in.
     Returns True only if the move was ACKed OK."""
-    fx = converter.frame_width * 0.5
-    fy = converter.frame_height * 0.35
+    if _cursor_park_region is not None:
+        fx = _cursor_park_region.left + random.uniform(
+            _cursor_park_region.width * 0.05,
+            _cursor_park_region.width * 0.95,
+        )
+        fy = _cursor_park_region.top + random.uniform(
+            _cursor_park_region.height * 0.05,
+            _cursor_park_region.height * 0.95,
+        )
+    else:
+        fx = converter.frame_width * 0.5
+        fy = converter.frame_height * 0.35
     ux, uy = converter.convert(fx, fy)
     ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     return ack is not None and ack.ok

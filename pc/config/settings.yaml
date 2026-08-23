@@ -330,6 +330,13 @@ step3:
 routine:
   restart_delay_seconds: 5.0
 
+# Common death recovery for every frame captured during Steps 1-4.
+death_recovery:
+  dialog_template: templates/dialog_restart.png
+  dialog_match_threshold: 0.85
+  icon_template: templates/icon_restart.png
+  icon_match_threshold: 0.85
+
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have
 # pc/serial/port_finder.py find the board automatically by its USB

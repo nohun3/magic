@@ -33,7 +33,9 @@ import sys
 import random
 import threading
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
+from typing import TextIO
 
 import cv2
 
@@ -47,7 +49,15 @@ from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.timing import sleep_jittered  # noqa: E402
-from pc.routine.step_move_to_hotel import _capture_and_convert  # noqa: E402
+from pc.routine.death_recovery import (  # noqa: E402
+    DeathAwareScreenCapture,
+    DeathRecoveryController,
+    DeathRecoveryRequested,
+)
+from pc.routine.step_move_to_hotel import (  # noqa: E402
+    _capture_and_convert,
+    set_cursor_park_region,
+)
 
 import pc.routine.step_buy_hotel_key as step1  # noqa: E402
 import pc.routine.step_move_to_wasteland as step3  # noqa: E402
@@ -55,12 +65,55 @@ import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 
 DEFAULT_RESTART_DELAY_S = 5.0
-MIN_DUNGEON_MINUTES_FOR_STEP3 = 10
+MIN_DUNGEON_MINUTES_FOR_STEP3 = 5
 RESUME_WINDOW_START_HOUR = 7
 RESUME_WINDOW_START_MINUTE = 30
 RESUME_WINDOW_END_HOUR = 8
 RESUME_WINDOW_END_MINUTE = 30
 WAIT_POLL_SECONDS = 30.0
+
+_routine_log_file: TextIO | None = None
+
+
+class _TeeStream:
+    """Write every print to both the original stream and a UTF-8 log."""
+
+    def __init__(self, screen: TextIO, log_file: TextIO):
+        self._screen = screen
+        self._log_file = log_file
+        self._lock = threading.RLock()
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            self._screen.write(text)
+            self._log_file.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            self._screen.flush()
+            self._log_file.flush()
+
+    def isatty(self) -> bool:
+        return self._screen.isatty()
+
+    @property
+    def encoding(self):
+        return getattr(self._screen, "encoding", "utf-8")
+
+
+def _enable_file_logging() -> Path:
+    """Tee stdout/stderr to one timestamped file for this process."""
+    global _routine_log_file
+    log_dir = _PROJECT_ROOT / "output" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"routine_{timestamp}.log"
+    _routine_log_file = log_path.open("a", encoding="utf-8", buffering=1)
+    sys.stdout = _TeeStream(sys.stdout, _routine_log_file)
+    sys.stderr = _TeeStream(sys.stderr, _routine_log_file)
+    print(f"[log] file: {log_path}")
+    return log_path
 
 
 def _choose_resume_time(now: datetime) -> datetime:
@@ -111,6 +164,7 @@ def _click_startup_chat(link: SerialLink, settings: dict, project_root: Path,
         print("[startup] roi_chatting not found")
         return False
     print(f"[startup] roi_chatting found: {match.region}")
+    set_cursor_park_region(match.region)
     return step3.click_region_once(link, converter, match.region)
 
 
@@ -159,9 +213,16 @@ def _run_once() -> float:
             sleep_jittered(0.3)
             link.poll_acks()
 
+            death_controller = DeathRecoveryController(
+                settings, project_root, window_title, link
+            )
+            routine_capture_cls = partial(
+                DeathAwareScreenCapture, ScreenCapture, death_controller
+            )
+
             print("[startup] clicking roi_chatting once before F2...")
             if not _click_startup_chat(
-                link, settings, project_root, window_title, ScreenCapture
+                link, settings, project_root, window_title, routine_capture_cls
             ):
                 print("[startup] roi_chatting click failed -- restarting session")
                 return restart_delay_s
@@ -173,7 +234,7 @@ def _run_once() -> float:
 
             print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP 97% 이상 대기) ===")
             ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
-                                     hotel_text, rent_room_text, ok_button_text, ScreenCapture)
+                                     hotel_text, rent_room_text, ok_button_text, routine_capture_cls)
             if not ok:
                 print("[stop] 초기 진입 실패.")
                 return restart_delay_s
@@ -189,7 +250,7 @@ def _run_once() -> float:
                 else:
                     print("[pre-step3] reading dungeon time from chat...")
                     dungeon_minutes = step4.read_and_log_chat(
-                        settings, project_root, window_title, ScreenCapture,
+                        settings, project_root, window_title, routine_capture_cls,
                         korean_reader,
                     )
                 if (
@@ -210,7 +271,7 @@ def _run_once() -> float:
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, ScreenCapture, force_run=True,
+                        ok_button_text, routine_capture_cls, force_run=True,
                     )
                     if not ok:
                         print("[resume] Step 2 failed; returning to normal recovery")
@@ -222,14 +283,14 @@ def _run_once() -> float:
                 step3_result = step3.run(
                     settings, project_root, window_title, link, skill_panel,
                     wasteland_text, gate_dest_text, step_forward_text, korean_reader,
-                    ScreenCapture, hp_detector=hp_detector,
+                    routine_capture_cls, hp_detector=hp_detector,
                 )
                 if step3_result is None:
                     print("[3단계] recovery requested -> running [2단계]")
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, ScreenCapture, force_run=True,
+                        ok_button_text, routine_capture_cls, force_run=True,
                     )
                     if not ok:
                         print(f"[stop] cycle {cycle}: emergency [2단계] failed.")
@@ -243,7 +304,7 @@ def _run_once() -> float:
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
                 ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                                 hotel_text, rent_room_text, ok_button_text,
-                                ScreenCapture, korean_reader)
+                                routine_capture_cls, korean_reader)
                 if not ok:
                     print(f"[stop] 사이클 {cycle}: [4단계] (또는 그 안의 다음 사이클 진입) 실패.")
                     return restart_delay_s
@@ -254,6 +315,7 @@ def _run_once() -> float:
 
 def main() -> None:
     """Restart failed sessions until the user explicitly presses Ctrl+C."""
+    _enable_file_logging()
     if os.environ.get("ROUTINE_CONTROL_STDIN") == "1":
         def listen_for_gui_stop() -> None:
             for line in sys.stdin:
@@ -267,6 +329,9 @@ def main() -> None:
             restart_delay_s = DEFAULT_RESTART_DELAY_S
             try:
                 restart_delay_s = _run_once()
+            except DeathRecoveryRequested as error:
+                restart_delay_s = 1.0
+                print(f"[death] recovery requested: {error}; restarting from Step 2")
             except Exception as e:
                 print(f"[recovery] unexpected {type(e).__name__}: {e}")
             print(
