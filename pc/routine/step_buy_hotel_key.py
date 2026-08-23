@@ -55,6 +55,7 @@ from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
 from pc.routine.step_move_to_wasteland import click_region_once, SPRITE_CLICK_JITTER  # noqa: E402
+from pc.routine.timing import sleep_jittered  # noqa: E402
 
 # How long to wait after double-clicking talking_scroll before the
 # dialog has finished opening/rendering.
@@ -160,7 +161,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     print("  parking cursor (clear any leftover tooltip from a previous step)...")
     park_cursor(link, converter)
-    time.sleep(0.2)
+    sleep_jittered(0.2)
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     scroll = locate_talking_scroll(settings, project_root, frame, skill_panel)
     print(f"  talking_scroll: present={scroll.present} score={scroll.match_score:.3f} region={scroll.region}")
@@ -173,7 +174,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
-    time.sleep(DIALOG_OPEN_SETTLE_S)
+    sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
     print("[2/5] finding '[오렌] 여관' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -188,7 +189,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {TELEPORT_SETTLE_S}s for teleport...")
-    time.sleep(TELEPORT_SETTLE_S)
+    sleep_jittered(TELEPORT_SETTLE_S)
 
     print("[3/5] finding npc_hotel_manager...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -206,7 +207,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {DIALOG_STEP_SETTLE_S}s for NPC dialogue...")
-    time.sleep(DIALOG_STEP_SETTLE_S)
+    sleep_jittered(DIALOG_STEP_SETTLE_S)
 
     print("[4/5] finding '방을 대여한다' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -218,7 +219,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         # wasn't up yet) -- one extra wait-and-retry before giving up,
         # rather than failing on what's just slow rendering.
         print(f"  not found -- retrying once after another {DIALOG_STEP_SETTLE_S}s...")
-        time.sleep(DIALOG_STEP_SETTLE_S)
+        sleep_jittered(DIALOG_STEP_SETTLE_S)
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
         rent_target = rent_room_text.find(frame)
         print(f"  target region (retry): {rent_target}")
@@ -231,7 +232,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {DIALOG_STEP_SETTLE_S}s for the confirm prompt...")
-    time.sleep(DIALOG_STEP_SETTLE_S)
+    sleep_jittered(DIALOG_STEP_SETTLE_S)
 
     print("[5/5] finding 'OK' button...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -242,7 +243,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
     ok = click_region_once(link, converter, ok_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    time.sleep(0.6)
+    sleep_jittered(0.6)
     return ok
 
 
@@ -270,9 +271,9 @@ def main() -> None:
     serial_cfg = settings["serial"]
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
-            time.sleep(2.5)  # Leonardo boot delay after port open
+            sleep_jittered(2.5)  # Leonardo boot delay after port open
             link.send("PING")
-            time.sleep(0.3)
+            sleep_jittered(0.3)
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel,

@@ -39,6 +39,7 @@ from pc.detector.chat_reader import KoreanTextReader  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
+from pc.routine.timing import sleep_jittered  # noqa: E402
 
 import pc.routine.step_buy_hotel_key as step1  # noqa: E402
 import pc.routine.step_move_to_wasteland as step3  # noqa: E402
@@ -88,10 +89,17 @@ def _run_once() -> float:
     serial_cfg = settings["serial"]
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
-            time.sleep(2.5)  # Leonardo boot delay after port open
+            sleep_jittered(2.5)  # Leonardo boot delay after port open
             link.send("PING")
-            time.sleep(0.3)
+            sleep_jittered(0.3)
             link.poll_acks()
+
+            # Select the F2 quick-slot tab before any routine step inspects
+            # or interacts with the game screen.
+            print("[startup] pressing F2 once before entering the routine...")
+            if not link.send_and_wait("KEY", "F2"):
+                print("[startup] F2 keypress not ACKed -- restarting session")
+                return restart_delay_s
 
             print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP 97% 이상 대기) ===")
             ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
@@ -149,7 +157,7 @@ def main() -> None:
                 f"[recovery] restarting from the Step 2 entry precondition "
                 f"in {restart_delay_s:.1f}s..."
             )
-            time.sleep(max(0.1, restart_delay_s))
+            sleep_jittered(max(0.1, restart_delay_s))
     except KeyboardInterrupt:
         print("\n[stopped] user requested Ctrl+C")
 if __name__ == "__main__":

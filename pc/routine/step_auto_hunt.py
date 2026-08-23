@@ -57,6 +57,7 @@ from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
+from pc.routine.timing import sleep_jittered  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
 HP_HEAL_PERCENT = 70.0
@@ -168,7 +169,7 @@ def press_heel_key(link: SerialLink) -> bool:
     if first is None or not first.ok:
         print("    [heel] F9 (1st) -> FAILED (missing ACK)")
         return False
-    time.sleep(HEEL_KEY_INTERVAL_S)
+    sleep_jittered(HEEL_KEY_INTERVAL_S)
     second = link.send_and_wait("KEY", f"F9 {HEEL_KEY_HOLD_MS}")
     ok = second is not None and second.ok
     print(
@@ -196,7 +197,7 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
     ats_off_detector = build_ats_off_detector(settings, project_root, skill_panel)
 
     for tick in range(1, MAX_TICKS + 1):
-        time.sleep(MONITOR_INTERVAL_S)
+        sleep_jittered(MONITOR_INTERVAL_S)
 
         with screen_capture_cls(window_title=window_title) as cap:
             frame = cap.grab()
@@ -261,7 +262,7 @@ def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill
                 )
                 if teleported:
                     print(f"    [emergency] waiting {EMERGENCY_TELEPORT_SETTLE_S:.1f}s for teleport transition...")
-                    time.sleep(EMERGENCY_TELEPORT_SETTLE_S)
+                    sleep_jittered(EMERGENCY_TELEPORT_SETTLE_S)
                 else:
                     print("    [emergency] teleport failed; attempting heal in place")
                 healed = press_heel_key(link)
@@ -330,7 +331,7 @@ def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_ca
                 print(f"  HP {hp.current}/{hp.maximum} (100%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%) -- 대기 종료")
                 return
             print(f"    HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%) -- 대기...")
-        time.sleep(poll_interval_s)
+        sleep_jittered(poll_interval_s)
 
 
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
@@ -441,9 +442,9 @@ def main() -> None:
     serial_cfg = settings["serial"]
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
-            time.sleep(2.5)  # Leonardo boot delay after port open
+            sleep_jittered(2.5)  # Leonardo boot delay after port open
             link.send("PING")
-            time.sleep(0.3)
+            sleep_jittered(0.3)
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, hp_detector, mp_detector,

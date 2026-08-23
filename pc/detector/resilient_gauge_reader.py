@@ -35,14 +35,14 @@ class ResilientGaugeReader:
         self._last_known_max: Optional[int] = None
         self._last_known_current: Optional[int] = None
         self._last_saved_signature = None
-        # The supervised model is intentionally enabled only for HP: its
-        # labels currently come from HP crops.  MP uses the same glyphs but
-        # a different horizontal layout, so applying the HP cell geometry
-        # there would be unsafe until MP has its own labelled calibration.
-        model_path = suspicious_output_dir.parent / "gauge_font_model.npz"
+        model_name = (
+            "gauge_font_model.npz" if self._gauge_name == "hp"
+            else "mp_gauge_font_model.npz"
+        )
+        model_path = suspicious_output_dir.parent / model_name
         self._font_reader = (
             GameFontGaugeReader(model_path, minimum_confidence=0.94)
-            if self._gauge_name == "hp" and model_path.exists()
+            if model_path.exists()
             else None
         )
 

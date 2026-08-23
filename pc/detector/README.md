@@ -121,6 +121,14 @@ and reopening the tool resumes at the first unlabelled image.  This CSV and
 the screenshots stay below the git-ignored `output` directory because they
 may contain live-game information.
 
+To label only a visually diverse subset instead of every saved crop, create a
+selection manifest first.  The labeler automatically honours this file:
+
+```powershell
+python -m pc.detector.select_gauge_samples mp --count 100
+python -m pc.detector.label_gauge_samples
+```
+
 After labelling, build the fixed-font model with:
 
 ```powershell
@@ -129,7 +137,8 @@ python -m pc.detector.train_gauge_font
 
 The trainer uses leave-one-image-out validation and refuses to save a model
 below 98% exact-string accuracy.  A successfully generated
-`output/gauge_font_model.npz` is picked up automatically for HP; PaddleOCR
-remains the fallback when the model is absent or its confidence is low.  MP
-keeps using PaddleOCR until separately labelled MP crops calibrate its
-slightly different text position.
+`output/gauge_font_model.npz` is picked up automatically for HP and
+`output/mp_gauge_font_model.npz` for MP; PaddleOCR remains the fallback when
+the matching model is absent or its confidence is low.  HP is right-aligned
+toward the centre ornament, while MP is left-aligned with a slash position
+that moves with the current-value digit count, so they use separate models.

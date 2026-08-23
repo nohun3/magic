@@ -12,6 +12,8 @@ import numpy as np
 from pc.detector.game_font_reader import (
     ALPHABET,
     FIELD_DIGITS,
+    GAUGE_CELL_X,
+    GAUGE_CELL_Y,
     GAUGE_CHARACTER_COUNT,
     extract_cells,
 )
@@ -34,9 +36,15 @@ def load_examples(root: Path, gauge: str = "hp"):
         maximum = str(int(row["maximum"]))
         if len(current) > FIELD_DIGITS or len(maximum) > FIELD_DIGITS:
             continue
-        text = f"{current:>{FIELD_DIGITS}}/{maximum:>{FIELD_DIGITS}}"
+        text = (
+            f"{current}/{maximum}" if gauge == "mp"
+            else f"{current:>{FIELD_DIGITS}}/{maximum:>{FIELD_DIGITS}}"
+        )
         examples.append(
-            (row["path"], text, extract_cells(image, GAUGE_CHARACTER_COUNT))
+            (
+                row["path"], text,
+                extract_cells(image, len(text), gauge),
+            )
         )
     return examples
 
@@ -74,15 +82,20 @@ def cross_validate(examples) -> tuple[int, int, int, int, list[tuple[str, str, s
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
-    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--model", type=Path)
     parser.add_argument("--gauge", choices=("hp", "mp"), default="hp")
     args = parser.parse_args()
+    model_path = args.model or (
+        DEFAULT_MODEL if args.gauge == "hp"
+        else PROJECT_ROOT / "output" / "mp_gauge_font_model.npz"
+    )
 
     examples = load_examples(args.root, args.gauge)
     if len(examples) < 20:
         raise SystemExit(f"need at least 20 labelled images; found {len(examples)}")
     counts = Counter(character for _path, text, _cells in examples for character in text)
-    missing = set(ALPHABET) - counts.keys()
+    required_alphabet = ALPHABET.replace(" ", "") if args.gauge == "mp" else ALPHABET
+    missing = set(required_alphabet) - counts.keys()
     if missing:
         raise SystemExit(f"labels do not contain: {''.join(sorted(missing))}")
 
@@ -103,13 +116,16 @@ def main() -> None:
     for _path, text, cells in examples:
         labels.extend(text)
         samples.extend(cells)
-    args.model.parent.mkdir(parents=True, exist_ok=True)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
-        args.model,
+        model_path,
         samples=np.stack(samples).astype(np.uint8),
         labels=np.asarray(labels, dtype="U1"),
+        gauge=np.asarray(args.gauge),
+        cell_x=np.asarray(GAUGE_CELL_X[args.gauge]),
+        cell_y=np.asarray(GAUGE_CELL_Y[args.gauge]),
     )
-    print(f"saved {len(samples)} glyphs to {args.model}")
+    print(f"saved {len(samples)} glyphs to {model_path}")
 
 
 if __name__ == "__main__":

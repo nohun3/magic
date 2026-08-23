@@ -9,6 +9,7 @@ as a label.  Labels are written incrementally so closing the window is safe.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import re
 import tkinter as tk
@@ -56,15 +57,30 @@ def _write_labels(labels: Dict[str, Tuple[int, int]]) -> None:
     temporary.replace(LABEL_PATH)
 
 
+def _sample_paths(gauges: tuple[str, ...] = ("hp", "mp")) -> List[Path]:
+    paths: List[Path] = []
+    for gauge in gauges:
+        manifest = SAMPLE_ROOT / f"{gauge}_selection.txt"
+        if manifest.exists():
+            paths.extend(
+                SAMPLE_ROOT / line.strip()
+                for line in manifest.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+        else:
+            paths.extend(sorted((SAMPLE_ROOT / gauge).glob("*.png")))
+    return [path for path in paths if path.is_file()]
+
+
 class GaugeLabeler:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, gauges: tuple[str, ...] = ("hp", "mp")):
         self.root = root
         self.labels = _load_labels()
-        self.samples: List[Path] = sorted(SAMPLE_ROOT.glob("[hm]p/*.png"))
+        self.samples = _sample_paths(gauges)
         self.index = 0
         self.photo = None
 
-        root.title("HP/MP gauge labeler")
+        root.title(f"{'/'.join(gauge.upper() for gauge in gauges)} gauge labeler")
         root.resizable(False, False)
         self.status = tk.Label(root, anchor="w", padx=10, pady=8)
         self.status.pack(fill="x")
@@ -144,8 +160,12 @@ class GaugeLabeler:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gauge", choices=("hp", "mp"))
+    args = parser.parse_args()
+    gauges = (args.gauge,) if args.gauge else ("hp", "mp")
     root = tk.Tk()
-    GaugeLabeler(root)
+    GaugeLabeler(root, gauges)
     root.mainloop()
 
 

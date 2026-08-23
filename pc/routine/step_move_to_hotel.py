@@ -57,6 +57,7 @@ from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
+from pc.routine.timing import sleep_jittered  # noqa: E402
 
 # How long to wait after pressing F2 before the tab swap has visibly
 # finished (icons re-render) -- generous but this step only runs
@@ -120,7 +121,7 @@ def ensure_skill_tab(link: SerialLink) -> bool:
     ack = link.send_and_wait("KEY", "F2")
     if ack is None or not ack.ok:
         return False
-    time.sleep(TAB_SWITCH_SETTLE_S)
+    sleep_jittered(TAB_SWITCH_SETTLE_S)
     return True
 
 
@@ -140,26 +141,26 @@ def park_cursor(link: SerialLink, converter: FrameToMouseConverter) -> bool:
 
 
 def double_click_region(link: SerialLink, converter: FrameToMouseConverter, region: Region) -> bool:
-    """Double-click a random point inside `region`, then park the cursor
-    away from it. Returns True only if the move and both clicks were
+    """Double-click within the centered 30% of `region`, then park the
+    cursor away from it. Returns True only if the move and both clicks were
     ACKed OK (parking failure doesn't fail the whole click -- the click
     itself already succeeded by that point)."""
-    fx = region.left + random.uniform(region.width * 0.3, region.width * 0.7)
-    fy = region.top + random.uniform(region.height * 0.3, region.height * 0.7)
+    fx = region.left + random.uniform(region.width * 0.35, region.width * 0.65)
+    fy = region.top + random.uniform(region.height * 0.35, region.height * 0.65)
     ux, uy = converter.convert(fx, fy)
 
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    time.sleep(0.15)
+    sleep_jittered(0.15)
     click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click1 is None or not click1.ok:
         return False
-    time.sleep(0.12)
+    sleep_jittered(0.12)
     click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click2 is None or not click2.ok:
         return False
-    time.sleep(0.1)
+    sleep_jittered(0.1)
     park_cursor(link, converter)
     return True
 
@@ -176,7 +177,7 @@ def press_escape_keys(link: SerialLink) -> bool:
         if ack is None or not ack.ok:
             print(f"    ESC {i + 1}/{count} -> FAILED (missing ACK)")
             return False
-        time.sleep(0.15)
+        sleep_jittered(0.15)
     print(f"    ESC x{count} -> ok")
     return True
 
@@ -196,7 +197,7 @@ def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_ca
             if mp.current >= min_mp:
                 print(f"    MP {mp.current}/{mp.maximum} -- 대기 종료")
                 return
-        time.sleep(poll_interval_s)
+        sleep_jittered(poll_interval_s)
 
 
 def _verify_and_retry_meditation(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
@@ -234,7 +235,7 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     # the click actually landed on/activated the skill in-game (found
     # live: the retry click ACKed fine but the buff still hadn't come
     # up). Re-check the buff itself instead of trusting the ACK alone.
-    time.sleep(0.6)
+    sleep_jittered(0.6)
     frame, _ = _capture_and_convert(window_title, screen_capture_cls)
     retry_buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
     if retry_buff_result.present:
@@ -303,7 +304,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     if not press_escape_keys(link):
         return False
 
-    time.sleep(TELEPORT_SETTLE_S)
+    sleep_jittered(TELEPORT_SETTLE_S)
 
     # -- sub-action 2: meditation --
     # Do not toggle/cancel meditation when it is already active. The
@@ -363,9 +364,9 @@ def main() -> None:
     serial_cfg = settings["serial"]
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
-            time.sleep(2.5)  # Leonardo boot delay after port open
+            sleep_jittered(2.5)  # Leonardo boot delay after port open
             link.send("PING")
-            time.sleep(0.3)
+            sleep_jittered(0.3)
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, mp_detector, ScreenCapture)

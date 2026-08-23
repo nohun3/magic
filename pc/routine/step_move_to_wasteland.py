@@ -72,6 +72,7 @@ from pc.detector.template_locator import MatchResult, locate_template  # noqa: E
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
+from pc.routine.timing import sleep_jittered  # noqa: E402
 
 # How long to wait after double-clicking teleport_scroll before the
 # dialog has finished opening/rendering.
@@ -400,8 +401,11 @@ GATE_RETRY_INTERVAL_S = 0.5
 # the interaction -- confirmed live (NPC dialogue repeatedly failed to
 # open; the click had landed just outside the sprite). Use
 # SPRITE_CLICK_JITTER for those instead.
-TEXT_CLICK_JITTER = 0.0
-SPRITE_CLICK_JITTER = 0.1
+# OCR text clicks use a random point inside the centered 30% of the full
+# recognized text box: 35%-65% on both axes.  Template/icon/sprite clicks
+# pass their own jitter and are unaffected by this default.
+TEXT_CLICK_JITTER = 0.15
+SPRITE_CLICK_JITTER = 0.15
 
 
 def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: float) -> bool:
@@ -427,11 +431,11 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    time.sleep(0.15)
+    sleep_jittered(0.15)
     click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click_ack is None or not click_ack.ok:
         return False
-    time.sleep(0.1)
+    sleep_jittered(0.1)
     park_cursor(link, converter)
     return True
 
@@ -446,34 +450,34 @@ def click_frame_ratio_once(link: SerialLink, converter: FrameToMouseConverter,
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    time.sleep(0.15)
+    sleep_jittered(0.15)
     click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click_ack is None or not click_ack.ok:
         return False
-    time.sleep(0.1)
+    sleep_jittered(0.1)
     park_cursor(link, converter)
     return True
 
 
 def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
                              region: Region) -> bool:
-    """Double-click the exact center of an OCR-recognized text box."""
-    fx = region.left + region.width * 0.5
-    fy = region.top + region.height * 0.5
+    """Double-click within the centered 30% of an OCR text box."""
+    fx = region.left + region.width * random.uniform(0.35, 0.65)
+    fy = region.top + region.height * random.uniform(0.35, 0.65)
     ux, uy = converter.convert(fx, fy)
 
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    time.sleep(0.15)
+    sleep_jittered(0.15)
     click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click1 is None or not click1.ok:
         return False
-    time.sleep(0.12)
+    sleep_jittered(0.12)
     click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
     if click2 is None or not click2.ok:
         return False
-    time.sleep(0.1)
+    sleep_jittered(0.1)
     park_cursor(link, converter)
     return True
 
@@ -499,7 +503,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     print("  parking cursor (clear any leftover tooltip from a previous step)...")
     park_cursor(link, converter)
-    time.sleep(0.2)
+    sleep_jittered(0.2)
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
         return None
@@ -514,7 +518,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
-    time.sleep(DIALOG_OPEN_SETTLE_S)
+    sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
     print("[2/6] finding '* [오렌] 버땅' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -531,7 +535,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {GATE_RENDER_SETTLE_S}s for the teleport gate to render...")
-    time.sleep(GATE_RENDER_SETTLE_S)
+    sleep_jittered(GATE_RENDER_SETTLE_S)
 
     print("[3/6] finding npc_teleport_gate (with retry-on-miss)...")
     dest_target = None
@@ -617,7 +621,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 return False
 
             print(f"    waiting {DIALOG_OPEN_SETTLE_S}s for the destination dialog...")
-            time.sleep(DIALOG_OPEN_SETTLE_S)
+            sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
             frame, converter = _capture_and_convert(window_title, screen_capture_cls)
             if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
@@ -630,7 +634,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
 
         if attempt < GATE_CLICK_MAX_ATTEMPTS:
             print(f"    waiting {GATE_RETRY_INTERVAL_S}s before stationary retry...")
-            time.sleep(GATE_RETRY_INTERVAL_S)
+            sleep_jittered(GATE_RETRY_INTERVAL_S)
 
     print("[4/6] clicking '버림받은 자들의 땅' (exact, not '...심연')...")
     if dest_target is None:
@@ -642,7 +646,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         return False
 
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for the level-requirement/confirm dialog...")
-    time.sleep(DIALOG_OPEN_SETTLE_S)
+    sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
     print("[5/6] finding '발을 내딛는다' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -668,7 +672,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     attempt = 0
     retried_click = False
     while time.monotonic() < deadline:
-        time.sleep(verify_interval_s)
+        sleep_jittered(verify_interval_s)
         attempt += 1
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
         if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
@@ -718,9 +722,9 @@ def main() -> None:
     serial_cfg = settings["serial"]
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
-            time.sleep(2.5)  # Leonardo boot delay after port open
+            sleep_jittered(2.5)  # Leonardo boot delay after port open
             link.send("PING")
-            time.sleep(0.3)
+            sleep_jittered(0.3)
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel,
