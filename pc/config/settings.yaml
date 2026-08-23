@@ -321,6 +321,10 @@ step3:
   hp_exit_percent: 50.0
   gate_miss_click_x_ratio: 0.50
   gate_miss_click_y_ratio: 0.20
+  # Random upper-screen click range around the ratios above. Defaults yield
+  # x=35~65% and y=15~25% of the game frame.
+  gate_miss_click_x_jitter: 0.15
+  gate_miss_click_y_jitter: 0.05
 
 # Failed steps restart from the Step 2 entry precondition instead of terminating.
 routine:

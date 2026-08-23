@@ -38,8 +38,8 @@ class RoutineController:
         self.desired_end_state = "중지"
 
         root.title("업무 도우미")
-        root.geometry("900x600")
-        root.minsize(640, 420)
+        root.geometry("450x600")
+        root.minsize(420, 420)
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         header = tk.Frame(root, padx=12, pady=10)

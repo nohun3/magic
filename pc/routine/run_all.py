@@ -35,6 +35,8 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import cv2
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -42,8 +44,10 @@ from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.chat_reader import KoreanTextReader  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
+from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.timing import sleep_jittered  # noqa: E402
+from pc.routine.step_move_to_hotel import _capture_and_convert  # noqa: E402
 
 import pc.routine.step_buy_hotel_key as step1  # noqa: E402
 import pc.routine.step_move_to_wasteland as step3  # noqa: E402
@@ -91,6 +95,25 @@ def _wait_until_resume(target: datetime) -> None:
         sleep_jittered(min(WAIT_POLL_SECONDS, remaining))
 
 
+def _click_startup_chat(link: SerialLink, settings: dict, project_root: Path,
+                        window_title: str, screen_capture_cls) -> bool:
+    """Single-click a random point in the centered 30% of roi_chatting."""
+    chat_cfg = settings["chat"]
+    template = cv2.imread(str(project_root / chat_cfg["template"]))
+    if template is None:
+        print("[startup] roi_chatting template could not be loaded")
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    match = locate_template(
+        frame, template, float(chat_cfg.get("match_threshold", 0.5))
+    )
+    if match is None:
+        print("[startup] roi_chatting not found")
+        return False
+    print(f"[startup] roi_chatting found: {match.region}")
+    return step3.click_region_once(link, converter, match.region)
+
+
 def _run_once() -> float:
     """Run one session; ordinary failures return to the supervisor."""
     from pc.config.config_loader import load_settings
@@ -136,8 +159,13 @@ def _run_once() -> float:
             sleep_jittered(0.3)
             link.poll_acks()
 
-            # Select the F2 quick-slot tab before any routine step inspects
-            # or interacts with the game screen.
+            print("[startup] clicking roi_chatting once before F2...")
+            if not _click_startup_chat(
+                link, settings, project_root, window_title, ScreenCapture
+            ):
+                print("[startup] roi_chatting click failed -- restarting session")
+                return restart_delay_s
+
             print("[startup] pressing F2 once before entering the routine...")
             if not link.send_and_wait("KEY", "F2"):
                 print("[startup] F2 keypress not ACKed -- restarting session")

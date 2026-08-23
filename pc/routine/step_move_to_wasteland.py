@@ -441,10 +441,14 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
 
 
 def click_frame_ratio_once(link: SerialLink, converter: FrameToMouseConverter,
-                           x_ratio: float, y_ratio: float) -> bool:
-    """Click one configurable point expressed as a ratio of the game frame."""
-    fx = converter.frame_width * min(max(x_ratio, 0.0), 1.0)
-    fy = converter.frame_height * min(max(y_ratio, 0.0), 1.0)
+                           x_ratio: float, y_ratio: float,
+                           x_jitter: float = 0.0,
+                           y_jitter: float = 0.0) -> bool:
+    """Click a random point around a configured game-frame ratio."""
+    random_x_ratio = random.uniform(x_ratio - x_jitter, x_ratio + x_jitter)
+    random_y_ratio = random.uniform(y_ratio - y_jitter, y_ratio + y_jitter)
+    fx = converter.frame_width * min(max(random_x_ratio, 0.0), 1.0)
+    fy = converter.frame_height * min(max(random_y_ratio, 0.0), 1.0)
     ux, uy = converter.convert(fx, fy)
 
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
@@ -496,6 +500,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
+    gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
+    gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
     print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
         print("[stop] F2 keypress not ACKed")
@@ -573,11 +579,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             else:
                 print("    [warn] failed to save gate-failure game frame")
             clicked = click_frame_ratio_once(
-                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio
+                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio,
+                gate_miss_click_x_jitter, gate_miss_click_y_jitter,
             )
             print(
                 f"    gate and destination dialog missing: clicked upper-center "
-                f"({gate_miss_click_x_ratio:.2f}, {gate_miss_click_y_ratio:.2f}) "
+                f"(x={gate_miss_click_x_ratio - gate_miss_click_x_jitter:.2f}~"
+                f"{gate_miss_click_x_ratio + gate_miss_click_x_jitter:.2f}, "
+                f"y={gate_miss_click_y_ratio - gate_miss_click_y_jitter:.2f}~"
+                f"{gate_miss_click_y_ratio + gate_miss_click_y_jitter:.2f}) "
                 f"-> {'ok' if clicked else 'FAILED (missing ACK)'}"
             )
             if not clicked:
@@ -610,11 +620,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             # subsequently appears, while avoiding a click on the rendered
             # dialog itself.
             upper_clicked = click_frame_ratio_once(
-                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio
+                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio,
+                gate_miss_click_x_jitter, gate_miss_click_y_jitter,
             )
             print(
                 f"    after gate click: clicked upper-center "
-                f"({gate_miss_click_x_ratio:.2f}, {gate_miss_click_y_ratio:.2f}) "
+                f"(x={gate_miss_click_x_ratio - gate_miss_click_x_jitter:.2f}~"
+                f"{gate_miss_click_x_ratio + gate_miss_click_x_jitter:.2f}, "
+                f"y={gate_miss_click_y_ratio - gate_miss_click_y_jitter:.2f}~"
+                f"{gate_miss_click_y_ratio + gate_miss_click_y_jitter:.2f}) "
                 f"-> {'ok' if upper_clicked else 'FAILED (missing ACK)'}"
             )
             if not upper_clicked:
