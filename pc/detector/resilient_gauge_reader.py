@@ -13,34 +13,103 @@ the max-value memory has to be per-gauge, not shared.
 from __future__ import annotations
 
 import re
+import time
+from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from pc.detector.ocr_reader import GaugeReading, GaugeTextReader
+from pc.detector.game_font_reader import GameFontGaugeReader
 
 _VALUE_PATTERN = re.compile(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)")
 
 
 class ResilientGaugeReader:
-    def __init__(self, reader: GaugeTextReader):
+    def __init__(self, reader: GaugeTextReader, gauge_name: str,
+                 suspicious_output_dir: Path):
         self._reader = reader
+        self._gauge_name = gauge_name.lower()
+        self._suspicious_output_dir = suspicious_output_dir / self._gauge_name
         self._last_known_max: Optional[int] = None
         self._last_known_current: Optional[int] = None
+        self._last_saved_signature = None
+        # The supervised model is intentionally enabled only for HP: its
+        # labels currently come from HP crops.  MP uses the same glyphs but
+        # a different horizontal layout, so applying the HP cell geometry
+        # there would be unsafe until MP has its own labelled calibration.
+        model_path = suspicious_output_dir.parent / "gauge_font_model.npz"
+        self._font_reader = (
+            GameFontGaugeReader(model_path, minimum_confidence=0.94)
+            if self._gauge_name == "hp" and model_path.exists()
+            else None
+        )
 
     def read(self, crop_bgr: np.ndarray) -> Optional[GaugeReading]:
+        if self._font_reader is not None:
+            prediction = self._font_reader.predict(crop_bgr)
+            if (
+                prediction is not None
+                and prediction.confidence >= self._font_reader.minimum_confidence
+            ):
+                reading = prediction.reading
+                self._record_large_change(crop_bgr, reading, "game-font-model")
+                self._last_known_max = reading.maximum
+                self._last_known_current = reading.current
+                return reading
+
         combined = " ".join(self._reader.read_lines(crop_bgr))
 
         match = _VALUE_PATTERN.search(combined)
         if match:
             reading = GaugeReading(current=int(match.group(1)), maximum=int(match.group(2)))
             if reading.maximum <= 0 or reading.current > reading.maximum:
+                self._save_suspicious(crop_bgr, "invalid", reading, combined)
                 return None
+            self._record_large_change(crop_bgr, reading, combined)
             self._last_known_max = reading.maximum
             self._last_known_current = reading.current
             return reading
 
-        return self._recover(combined)
+        reading = self._recover(combined)
+        if reading is not None:
+            self._save_suspicious(crop_bgr, "recovered", reading, combined)
+        else:
+            self._save_suspicious(crop_bgr, "unreadable", None, combined)
+        return reading
+
+    def _record_large_change(self, crop_bgr: np.ndarray, reading: GaugeReading,
+                             raw_text: str) -> None:
+        if self._last_known_max is not None and reading.maximum != self._last_known_max:
+            self._save_suspicious(crop_bgr, "max_changed", reading, raw_text)
+            return
+        if self._last_known_current is None:
+            return
+        reference_max = self._last_known_max or reading.maximum
+        if abs(reading.current - self._last_known_current) >= reference_max * 0.25:
+            self._save_suspicious(crop_bgr, "large_change", reading, raw_text)
+
+    def _save_suspicious(self, crop_bgr: np.ndarray, reason: str,
+                         reading: Optional[GaugeReading], raw_text: str) -> None:
+        """Save a raw gauge crop once per distinct suspicious transition."""
+        current = reading.current if reading is not None else -1
+        maximum = reading.maximum if reading is not None else -1
+        signature = (reason, self._last_known_current, self._last_known_max,
+                     current, maximum, raw_text)
+        if signature == self._last_saved_signature:
+            return
+        self._last_saved_signature = signature
+        try:
+            self._suspicious_output_dir.mkdir(parents=True, exist_ok=True)
+            timestamp_ms = int(time.time() * 1000)
+            previous = self._last_known_current if self._last_known_current is not None else "na"
+            path = self._suspicious_output_dir / (
+                f"{timestamp_ms}_{reason}_prev{previous}_ocr{current}_max{maximum}.png"
+            )
+            cv2.imwrite(str(path), crop_bgr)
+        except (OSError, cv2.error):
+            pass
 
     def _recover(self, text: str) -> Optional[GaugeReading]:
         """Anchor on the last known max to salvage a reading the normal

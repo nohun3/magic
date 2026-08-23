@@ -104,3 +104,32 @@ window size, different game) or matching stops working:
 - `enable_mkldnn=False` in `ocr_reader.py` works around a
   PaddlePaddle 3.x + oneDNN inference bug on this machine. Safe to try
   removing if paddlepaddle is upgraded later.
+## HP/MP game-font training samples
+
+Suspicious gauge crops are saved under
+`output/suspicious_gauge_roi/{hp,mp}`.  The number after `ocr` in a
+filename is the result that was suspected, **not ground truth**.  Assign the
+value visibly rendered in each image with:
+
+```powershell
+python -m pc.detector.label_gauge_samples
+```
+
+Enter `current/max` (for example `177/194`) and press Enter.  Progress is
+saved after every image to `output/suspicious_gauge_roi/labels.csv`; closing
+and reopening the tool resumes at the first unlabelled image.  This CSV and
+the screenshots stay below the git-ignored `output` directory because they
+may contain live-game information.
+
+After labelling, build the fixed-font model with:
+
+```powershell
+python -m pc.detector.train_gauge_font
+```
+
+The trainer uses leave-one-image-out validation and refuses to save a model
+below 98% exact-string accuracy.  A successfully generated
+`output/gauge_font_model.npz` is picked up automatically for HP; PaddleOCR
+remains the fallback when the model is absent or its confidence is low.  MP
+keeps using PaddleOCR until separately labelled MP crops calibrate its
+slightly different text position.

@@ -5,6 +5,8 @@ this doesn't match the MP bar image directly.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from pc.detector.anchored_gauge_detector import AnchoredGaugeDetector
 from pc.detector.ocr_reader import GaugeTextReader
 from pc.detector.resilient_gauge_reader import ResilientGaugeReader
@@ -12,10 +14,13 @@ from pc.detector.skill_panel import SkillPanelLocator
 from pc.detector.window_content import ContentOffset, WindowContentLocator
 
 
-def build_mp_detector(anchor: SkillPanelLocator, content_offset: ContentOffset, reader: GaugeTextReader) -> AnchoredGaugeDetector:
+def build_mp_detector(anchor: SkillPanelLocator, content_offset: ContentOffset,
+                      reader: GaugeTextReader, suspicious_output_dir: Path) -> AnchoredGaugeDetector:
     content_locator = WindowContentLocator(anchor, content_offset)
     # ResilientGaugeReader wraps the shared OCR engine with its own
     # last-known-max memory -- see resilient_gauge_reader.py. This is
     # what fixes the observed "MP:45/414" -> OCR'd as "MP:451414" ("/"
     # misread as "1") failure mode.
-    return AnchoredGaugeDetector(content_locator, ResilientGaugeReader(reader))
+    return AnchoredGaugeDetector(
+        content_locator, ResilientGaugeReader(reader, "mp", suspicious_output_dir)
+    )

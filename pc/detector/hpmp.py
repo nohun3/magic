@@ -25,6 +25,13 @@ def build_hp_mp_detectors(
     # search -- the other just reuses the cached position.
     roi_hpmp_anchor = SkillPanelLocator(project_root / anchor_cfg["template"], anchor_cfg.get("match_threshold", 0.9))
 
-    hp_detector = build_hp_detector(roi_hpmp_anchor, ContentOffset(**settings["hp"]["content_offset"]), reader)
-    mp_detector = build_mp_detector(roi_hpmp_anchor, ContentOffset(**settings["mp"]["content_offset"]), reader)
+    suspicious_output_dir = project_root / "output" / "suspicious_gauge_roi"
+    hp_detector = build_hp_detector(
+        roi_hpmp_anchor, ContentOffset(**settings["hp"]["content_offset"]),
+        reader, suspicious_output_dir,
+    )
+    mp_detector = build_mp_detector(
+        roi_hpmp_anchor, ContentOffset(**settings["mp"]["content_offset"]),
+        reader, suspicious_output_dir,
+    )
     return hp_detector, mp_detector

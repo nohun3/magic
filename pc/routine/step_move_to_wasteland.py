@@ -600,6 +600,22 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             if not ok:
                 return False
 
+            # Always follow one acknowledged gate click with one click toward
+            # the upper-center of the game field. Do this before waiting for
+            # the dialog so the fallback is independent of whether the dialog
+            # subsequently appears, while avoiding a click on the rendered
+            # dialog itself.
+            upper_clicked = click_frame_ratio_once(
+                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio
+            )
+            print(
+                f"    after gate click: clicked upper-center "
+                f"({gate_miss_click_x_ratio:.2f}, {gate_miss_click_y_ratio:.2f}) "
+                f"-> {'ok' if upper_clicked else 'FAILED (missing ACK)'}"
+            )
+            if not upper_clicked:
+                return False
+
             print(f"    waiting {DIALOG_OPEN_SETTLE_S}s for the destination dialog...")
             time.sleep(DIALOG_OPEN_SETTLE_S)
 
