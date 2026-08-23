@@ -32,15 +32,29 @@ from paddleocr import PaddleOCR
 
 from pc.capture.screen_capture import Region
 
-_DUNGEON_TIME_PATTERN = re.compile(r"던전\s*시간\s*(\d+)\s*분\s*남았습니다")
-
-
-# Match the first duration in messages such as
+# Identify messages such as
 # "dungeon time is 147 minutes remaining (account balance: 147 minutes)".
 # Unicode escapes keep the Korean pattern stable across terminal code pages.
 _DUNGEON_TIME_PATTERN = re.compile(
     r"\ub358\uc804\s*\uc2dc\uac04\uc774?\s*(\d+)\s*\ubd84\s*\ub0a8\uc558\uc2b5\ub2c8\ub2e4"
 )
+_MINUTES_IN_LINE_PATTERN = re.compile(r"(\d+)\s*\ubd84")
+
+
+def _minutes_from_dungeon_line(line: str) -> Optional[int]:
+    """Parse one dungeon message conservatively.
+
+    The message can repeat the duration later on the same line (for
+    example as an account balance).  PaddleOCR has been observed to read
+    the leading ``50`` as ``5`` while reading the repeated ``50``
+    correctly.  Taking only the first capture therefore caused a false
+    low-time shutdown.  Once the line is confirmed to be a dungeon-time
+    message, use the largest minute value printed on that line.
+    """
+    if _DUNGEON_TIME_PATTERN.search(line) is None:
+        return None
+    values = [int(value) for value in _MINUTES_IN_LINE_PATTERN.findall(line)]
+    return max(values) if values else None
 
 
 @dataclass
@@ -133,16 +147,16 @@ class DungeonTimeReader:
 
     def read(self, crop_bgr: np.ndarray) -> Optional[DungeonTimeReading]:
         for line in self._reader.read_lines(crop_bgr):
-            match = _DUNGEON_TIME_PATTERN.search(line)
-            if match:
-                return DungeonTimeReading(minutes_remaining=int(match.group(1)))
+            minutes = _minutes_from_dungeon_line(line)
+            if minutes is not None:
+                return DungeonTimeReading(minutes_remaining=minutes)
         return None
 
 
 def extract_dungeon_minutes(lines: List[str]) -> Optional[int]:
-    """Return the first dungeon duration in OCR lines, or None."""
+    """Return the first valid dungeon message's conservative duration."""
     for line in lines:
-        match = _DUNGEON_TIME_PATTERN.search(line)
-        if match:
-            return int(match.group(1))
+        minutes = _minutes_from_dungeon_line(line)
+        if minutes is not None:
+            return minutes
     return None
