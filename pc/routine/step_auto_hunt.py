@@ -47,6 +47,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import cv2
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -55,6 +57,8 @@ from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
+from pc.detector.chat_reader import KoreanTextReader, extract_dungeon_minutes  # noqa: E402
+from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
 from pc.routine.timing import sleep_jittered  # noqa: E402
@@ -94,6 +98,49 @@ MP_STAGNANT_TICKS_BEFORE_TELEPORT = 5
 # spin this forever unattended -- normal exit is always the MP <= 5%
 # condition well before this. ~2 hours at MONITOR_INTERVAL_S=1.0.
 MAX_TICKS = 7200
+
+
+def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
+                      screen_capture_cls,
+                      reader: KoreanTextReader) -> Optional[int]:
+    """OCR chat, print it, and return the dungeon minutes when present."""
+    try:
+        chat_cfg = settings["chat"]
+        template = cv2.imread(str(project_root / chat_cfg["template"]))
+        if template is None:
+            print("  [chat OCR] template could not be loaded")
+            return None
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        match = locate_template(
+            frame, template, float(chat_cfg.get("match_threshold", 0.5))
+        )
+        if match is None:
+            print("  [chat OCR] chat region not found")
+            return None
+        region = match.region
+        crop = frame[
+            region.top:region.top + region.height,
+            region.left:region.left + region.width,
+        ]
+        lines = reader.read_lines(crop)
+        if not lines:
+            print("  [chat OCR] no text recognized")
+            return None
+        print(f"  [chat OCR] {len(lines)} line(s):")
+        for index, line in enumerate(lines, start=1):
+            print(f"    [{index:02d}] {line}")
+        dungeon_minutes = extract_dungeon_minutes(lines)
+        if dungeon_minutes is not None:
+            print(f"  [chat OCR] dungeon_minutes={dungeon_minutes}")
+        else:
+            print("  [chat OCR] dungeon_minutes not found")
+        return dungeon_minutes
+    except Exception as error:
+        # Chat logging is diagnostic only. A transient OCR/capture failure
+        # must never stop ATS monitoring or trigger routine recovery.
+        print(f"  [chat OCR] failed: {type(error).__name__}: {error}")
+        return None
 
 
 def build_ats_off_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -379,7 +426,8 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
 
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
-        hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text, screen_capture_cls) -> bool:
+        hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
+        screen_capture_cls, korean_reader: KoreanTextReader) -> bool:
     """Full [4단계]: ATS toggle + 1s monitoring loop + auto-handoff to
     [2단계] (via ensure_step2(), including its own [1단계]-if-needed
     precondition and MP-100% wait) once MP <= 5%, as a reusable function
@@ -394,6 +442,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     if not ok:
         print("[stop] could not toggle ATS on (neither ats_off nor ats_on present, or click failed).")
         return False
+
+    dungeon_minutes = read_and_log_chat(
+        settings, project_root, window_title, screen_capture_cls, korean_reader
+    )
 
     print("[2/2] monitoring HP/MP every 1s until MP <= 5%...")
     should_hand_off = monitor_and_hunt(link, settings, project_root, skill_panel, hp_detector, mp_detector, window_title, screen_capture_cls)
@@ -432,7 +484,6 @@ def main() -> None:
     # built unconditionally -- cheap (no OCR runs until actually used)
     # and keeps this script's standalone `python -m
     # pc.routine.step_auto_hunt` usable on its own, same as before.
-    from pc.detector.chat_reader import KoreanTextReader
     import pc.routine.step_buy_hotel_key as step1
     korean_reader = KoreanTextReader()
     hotel_text = step1.build_hotel_text_locator(settings, _PROJECT_ROOT, korean_reader)
@@ -448,7 +499,8 @@ def main() -> None:
             link.poll_acks()
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, hp_detector, mp_detector,
-                     hotel_text, rent_room_text, ok_button_text, ScreenCapture)
+                     hotel_text, rent_room_text, ok_button_text, ScreenCapture,
+                     korean_reader)
             if not ok:
                 sys.exit(1)
     except WindowNotFoundError as e:

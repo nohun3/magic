@@ -35,6 +35,14 @@ from pc.capture.screen_capture import Region
 _DUNGEON_TIME_PATTERN = re.compile(r"던전\s*시간\s*(\d+)\s*분\s*남았습니다")
 
 
+# Match the first duration in messages such as
+# "dungeon time is 147 minutes remaining (account balance: 147 minutes)".
+# Unicode escapes keep the Korean pattern stable across terminal code pages.
+_DUNGEON_TIME_PATTERN = re.compile(
+    r"\ub358\uc804\s*\uc2dc\uac04\uc774?\s*(\d+)\s*\ubd84\s*\ub0a8\uc558\uc2b5\ub2c8\ub2e4"
+)
+
+
 @dataclass
 class DungeonTimeReading:
     minutes_remaining: int
@@ -129,3 +137,12 @@ class DungeonTimeReader:
             if match:
                 return DungeonTimeReading(minutes_remaining=int(match.group(1)))
         return None
+
+
+def extract_dungeon_minutes(lines: List[str]) -> Optional[int]:
+    """Return the first dungeon duration in OCR lines, or None."""
+    for line in lines:
+        match = _DUNGEON_TIME_PATTERN.search(line)
+        if match:
+            return int(match.group(1))
+    return None

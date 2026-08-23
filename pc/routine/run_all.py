@@ -27,8 +27,12 @@ a Python input-simulation call -- see CLAUDE.md.
 """
 from __future__ import annotations
 
+import _thread
+import os
 import sys
-import time
+import random
+import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +51,44 @@ import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 
 DEFAULT_RESTART_DELAY_S = 5.0
+MIN_DUNGEON_MINUTES_FOR_STEP3 = 10
+RESUME_WINDOW_START_HOUR = 7
+RESUME_WINDOW_START_MINUTE = 30
+RESUME_WINDOW_END_HOUR = 8
+RESUME_WINDOW_END_MINUTE = 30
+WAIT_POLL_SECONDS = 30.0
+
+
+def _choose_resume_time(now: datetime) -> datetime:
+    """Choose one future time in the next available 07:30-08:30 window."""
+    start = now.replace(
+        hour=RESUME_WINDOW_START_HOUR,
+        minute=RESUME_WINDOW_START_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    end = now.replace(
+        hour=RESUME_WINDOW_END_HOUR,
+        minute=RESUME_WINDOW_END_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    if now >= end:
+        start += timedelta(days=1)
+        end += timedelta(days=1)
+    elif now > start:
+        start = now
+    span_seconds = max(0.0, (end - start).total_seconds())
+    return start + timedelta(seconds=random.uniform(0.0, span_seconds))
+
+
+def _wait_until_resume(target: datetime) -> None:
+    """Wait without HID input; Ctrl+C remains able to stop the process."""
+    while True:
+        remaining = (target - datetime.now()).total_seconds()
+        if remaining <= 0:
+            return
+        sleep_jittered(min(WAIT_POLL_SECONDS, remaining))
 
 
 def _run_once() -> float:
@@ -109,8 +151,45 @@ def _run_once() -> float:
                 return restart_delay_s
 
             cycle = 0
+            skip_dungeon_check_once = False
             while True:
                 cycle += 1
+                if skip_dungeon_check_once:
+                    skip_dungeon_check_once = False
+                    dungeon_minutes = None
+                    print("[pre-step3] post-reset cycle -- skipping stale chat check once")
+                else:
+                    print("[pre-step3] reading dungeon time from chat...")
+                    dungeon_minutes = step4.read_and_log_chat(
+                        settings, project_root, window_title, ScreenCapture,
+                        korean_reader,
+                    )
+                if (
+                    dungeon_minutes is not None
+                    and dungeon_minutes < MIN_DUNGEON_MINUTES_FOR_STEP3
+                ):
+                    resume_at = _choose_resume_time(datetime.now())
+                    print(
+                        f"[wait] dungeon_minutes={dungeon_minutes} is below "
+                        f"{MIN_DUNGEON_MINUTES_FOR_STEP3}; Step 3 is paused."
+                    )
+                    print(
+                        f"[wait] no input until randomized resume time: "
+                        f"{resume_at:%Y-%m-%d %H:%M:%S}"
+                    )
+                    _wait_until_resume(resume_at)
+                    print("[resume] randomized time reached -- restarting from Step 2")
+                    ok = step4.ensure_step2(
+                        settings, project_root, window_title, link, skill_panel,
+                        hp_detector, mp_detector, hotel_text, rent_room_text,
+                        ok_button_text, ScreenCapture, force_run=True,
+                    )
+                    if not ok:
+                        print("[resume] Step 2 failed; returning to normal recovery")
+                        return restart_delay_s
+                    skip_dungeon_check_once = True
+                    cycle -= 1
+                    continue
                 print(f"\n===== 사이클 {cycle}: [3단계] 버려진땅 이동 =====")
                 step3_result = step3.run(
                     settings, project_root, window_title, link, skill_panel,
@@ -135,7 +214,8 @@ def _run_once() -> float:
 
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
                 ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
-                                hotel_text, rent_room_text, ok_button_text, ScreenCapture)
+                                hotel_text, rent_room_text, ok_button_text,
+                                ScreenCapture, korean_reader)
                 if not ok:
                     print(f"[stop] 사이클 {cycle}: [4단계] (또는 그 안의 다음 사이클 진입) 실패.")
                     return restart_delay_s
@@ -146,6 +226,14 @@ def _run_once() -> float:
 
 def main() -> None:
     """Restart failed sessions until the user explicitly presses Ctrl+C."""
+    if os.environ.get("ROUTINE_CONTROL_STDIN") == "1":
+        def listen_for_gui_stop() -> None:
+            for line in sys.stdin:
+                if line.strip().upper() == "STOP":
+                    _thread.interrupt_main()
+                    return
+
+        threading.Thread(target=listen_for_gui_stop, daemon=True).start()
     try:
         while True:
             restart_delay_s = DEFAULT_RESTART_DELAY_S
