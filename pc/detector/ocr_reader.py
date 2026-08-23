@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
+import cv2
 import numpy as np
 from paddleocr import PaddleOCR
 
@@ -63,9 +64,16 @@ class GaugeTextReader:
     def read_lines(self, crop_bgr: np.ndarray) -> List[str]:
         """OCR `crop_bgr` and return the recognized text, one entry per
         detected line (in whatever order PaddleOCR found them -- not
-        guaranteed to be top-to-bottom). Empty list if nothing was
-        recognized."""
-        results = self._ocr.predict(crop_bgr)
+        guaranteed to be top-to-bottom). HP/MP text is a tiny fixed-size
+        pixel font, so enlarge only this gauge crop before recognition;
+        Korean dialog OCR uses a different reader and is unaffected.
+        Empty list if nothing was recognized."""
+        if crop_bgr.size == 0:
+            return []
+        enlarged = cv2.resize(
+            crop_bgr, None, fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC
+        )
+        results = self._ocr.predict(enlarged)
         if not results:
             return []
         return results[0].get("rec_texts") or []
