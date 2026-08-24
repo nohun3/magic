@@ -21,7 +21,9 @@ from tkinter.scrolledtext import ScrolledText
 from typing import Optional
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(
+    getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2])
+)
 VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 
 
@@ -275,11 +277,24 @@ class RoutineController:
 
 
 def main() -> None:
-    if "--routine-worker" in sys.argv:
+    if "--routine-worker" in sys.argv or "--ocr-self-test" in sys.argv:
         if getattr(sys, "frozen", False):
             os.environ.setdefault(
                 "PADDLE_PDX_CACHE_HOME", str(PROJECT_ROOT / ".paddlex")
             )
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        if "--ocr-self-test" in sys.argv:
+            from pc.detector.chat_reader import KoreanTextReader
+            from pc.detector.ocr_reader import GaugeTextReader
+
+            print("[self-test] initializing Korean OCR...", flush=True)
+            KoreanTextReader()
+            print("[self-test] initializing gauge OCR...", flush=True)
+            GaugeTextReader()
+            print("[self-test] OCR_INIT_OK", flush=True)
+            return
         from pc.routine.run_all import main as run_routine
 
         run_routine()

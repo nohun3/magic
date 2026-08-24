@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 
 datas = [
@@ -29,6 +29,20 @@ for package in ("paddle", "paddleocr", "paddlex"):
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+# PaddleX checks OCR optional dependencies through importlib.metadata at
+# runtime. Their modules alone are not enough in a frozen application; the
+# corresponding dist-info metadata must also be bundled or PaddleX reports a
+# false "dependency error" while constructing the OCR pipeline.
+for distribution in (
+    "imagesize",
+    "opencv-contrib-python",
+    "pyclipper",
+    "pypdfium2",
+    "python-bidi",
+    "shapely",
+):
+    datas += copy_metadata(distribution)
 
 a = Analysis(
     ["pc/routine/gui.py"],

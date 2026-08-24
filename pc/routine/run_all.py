@@ -32,6 +32,7 @@ import os
 import sys
 import random
 import threading
+import traceback
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -39,7 +40,9 @@ from typing import TextIO
 
 import cv2
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(
+    getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2])
+)
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
@@ -349,7 +352,43 @@ def _run_once() -> float:
                     settings, project_root, window_title, link, skill_panel,
                     wasteland_text, gate_dest_text, step_forward_text, korean_reader,
                     routine_capture_cls, hp_detector=hp_detector,
+                    after_forward_click=(
+                        lambda: step4.chat_contains_text(
+                            settings, project_root, window_title,
+                            routine_capture_cls, korean_reader, "오전 6시",
+                        )
+                    ) if pause_on_six_oclock_chat else None,
                 )
+                if step3_result is step3.Step3Result.WAIT_FOR_DUNGEON_RESET:
+                    resume_at = _choose_resume_time(datetime.now())
+                    print(
+                        "[wait] '오전 6시' was found immediately after "
+                        "clicking '발을 내딛는다.'; entering wait mode."
+                    )
+                    print(
+                        f"[wait] no input until randomized resume time: "
+                        f"{resume_at:%Y-%m-%d %H:%M:%S}"
+                    )
+                    _wait_until_resume(resume_at)
+                    print(
+                        "[resume] randomized time reached -- "
+                        "restarting from Step 2"
+                    )
+                    ok = step4.ensure_step2(
+                        settings, project_root, window_title, link,
+                        skill_panel, hp_detector, mp_detector,
+                        hotel_text, rent_room_text, ok_button_text,
+                        routine_capture_cls, force_run=True,
+                    )
+                    if not ok:
+                        print(
+                            "[resume] Step 2 failed; returning to "
+                            "normal recovery"
+                        )
+                        return restart_delay_s
+                    skip_dungeon_check_once = True
+                    cycle -= 1
+                    continue
                 if step3_result is None:
                     print("[3단계] recovery requested -> running [2단계]")
                     ok = step4.ensure_step2(
@@ -365,43 +404,6 @@ def _run_once() -> float:
                 if not step3_result:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
                     return restart_delay_s
-
-                if pause_on_six_oclock_chat:
-                    print("[post-step3] checking chat for '오전 6시'...")
-                    six_oclock_found = step4.chat_contains_text(
-                        settings, project_root, window_title,
-                        routine_capture_cls, korean_reader, "오전 6시",
-                    )
-                    if six_oclock_found:
-                        resume_at = _choose_resume_time(datetime.now())
-                        print(
-                            "[wait] '오전 6시' was found after clicking "
-                            "'발을 내딛는다.'; Step 4 is paused."
-                        )
-                        print(
-                            f"[wait] no input until randomized resume time: "
-                            f"{resume_at:%Y-%m-%d %H:%M:%S}"
-                        )
-                        _wait_until_resume(resume_at)
-                        print(
-                            "[resume] randomized time reached -- "
-                            "restarting from Step 2"
-                        )
-                        ok = step4.ensure_step2(
-                            settings, project_root, window_title, link,
-                            skill_panel, hp_detector, mp_detector,
-                            hotel_text, rent_room_text, ok_button_text,
-                            routine_capture_cls, force_run=True,
-                        )
-                        if not ok:
-                            print(
-                                "[resume] Step 2 failed; returning to "
-                                "normal recovery"
-                            )
-                            return restart_delay_s
-                        skip_dungeon_check_once = True
-                        cycle -= 1
-                        continue
 
                 if teleport_before_step4:
                     print("[pre-step4] teleporting before ATS starts...")
@@ -450,6 +452,7 @@ def main() -> None:
                 print(f"[death] recovery requested: {error}; restarting from Step 2")
             except Exception as e:
                 print(f"[recovery] unexpected {type(e).__name__}: {e}")
+                traceback.print_exc()
             print(
                 f"[recovery] restarting from the Step 2 entry precondition "
                 f"in {restart_delay_s:.1f}s..."

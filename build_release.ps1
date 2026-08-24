@@ -9,12 +9,15 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 Push-Location $projectRoot
 try {
-    & $python -m PyInstaller --noconfirm --clean STM200.spec
+    $stagingRoot = Join-Path $projectRoot "build\release"
+    $workRoot = Join-Path $projectRoot "build\pyinstaller"
+    & $python -m PyInstaller --noconfirm --clean `
+        --distpath $stagingRoot --workpath $workRoot STM200.spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }
 
-    $releaseDir = Join-Path $projectRoot "dist\STM200"
+    $releaseDir = Join-Path $stagingRoot "STM200"
     $zipPath = Join-Path $projectRoot "dist\STM200-win64.zip"
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force
