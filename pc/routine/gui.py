@@ -30,11 +30,23 @@ def routine_python() -> str:
     return str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
 
+def routine_command() -> list[str]:
+    """Return the routine worker command for source and packaged runs."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--routine-worker"]
+    return [routine_python(), "-u", "-m", "pc.routine.run_all"]
+
+
 class RoutineController:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.process: Optional[subprocess.Popen[str]] = None
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.pause_on_low_dungeon_time = tk.BooleanVar(value=True)
+        self.minimum_dungeon_minutes = tk.StringVar(value="9")
+        self.pause_on_six_oclock_chat = tk.BooleanVar(value=True)
+        self.teleport_before_step4 = tk.BooleanVar(value=True)
+        self.teleport_on_mp_stagnation = tk.BooleanVar(value=True)
         self.desired_end_state = "중지"
 
         root.title("업무 도우미")
@@ -63,6 +75,48 @@ class RoutineController:
         )
         self.stop_button.pack(side="left")
 
+        options = tk.Frame(root, padx=12, pady=4)
+        options.pack(fill="x")
+        self.low_dungeon_time_check = tk.Checkbutton(
+            options,
+            text="던전시간",
+            variable=self.pause_on_low_dungeon_time,
+        )
+        self.low_dungeon_time_check.pack(side="left")
+        self.minimum_dungeon_minutes_input = tk.Spinbox(
+            options,
+            from_=0,
+            to=999,
+            width=5,
+            textvariable=self.minimum_dungeon_minutes,
+        )
+        self.minimum_dungeon_minutes_input.pack(side="left", padx=(4, 4))
+        tk.Label(options, text="분 이하 시 대기").pack(side="left")
+
+        secondary_options = tk.Frame(root, padx=12, pady=0)
+        secondary_options.pack(fill="x")
+
+        self.six_oclock_chat_check = tk.Checkbutton(
+            secondary_options,
+            text="발을 내딛은 후 채팅에 '오전 6시' 감지 시 대기",
+            variable=self.pause_on_six_oclock_chat,
+        )
+        self.six_oclock_chat_check.pack(anchor="w")
+
+        self.pre_step4_teleport_check = tk.Checkbutton(
+            secondary_options,
+            text="4단계 시작 전 텔레포트",
+            variable=self.teleport_before_step4,
+        )
+        self.pre_step4_teleport_check.pack(anchor="w")
+
+        self.mp_stagnation_teleport_check = tk.Checkbutton(
+            secondary_options,
+            text="MP 5틱 미감소 시 텔레포트",
+            variable=self.teleport_on_mp_stagnation,
+        )
+        self.mp_stagnation_teleport_check.pack(anchor="w")
+
         self.log = ScrolledText(
             root, wrap="word", state="disabled", font=("Consolas", 10),
             bg="#111827", fg="#e5e7eb", insertbackground="white",
@@ -82,18 +136,38 @@ class RoutineController:
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
             return
+        try:
+            minimum_dungeon_minutes = int(self.minimum_dungeon_minutes.get())
+            if minimum_dungeon_minutes < 0:
+                raise ValueError
+        except ValueError:
+            self._append("[GUI] 던전시간 기준은 0 이상의 정수로 입력하세요.\n")
+            return
         environment = os.environ.copy()
         environment["ROUTINE_CONTROL_STDIN"] = "1"
         # Windows otherwise encodes a piped Python stdout with the active
         # legacy code page (usually CP949), while this GUI reads UTF-8.
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
+        environment["ROUTINE_PAUSE_ON_LOW_DUNGEON_TIME"] = (
+            "1" if self.pause_on_low_dungeon_time.get() else "0"
+        )
+        environment["ROUTINE_MIN_DUNGEON_MINUTES"] = str(minimum_dungeon_minutes)
+        environment["ROUTINE_PAUSE_ON_SIX_OCLOCK_CHAT"] = (
+            "1" if self.pause_on_six_oclock_chat.get() else "0"
+        )
+        environment["ROUTINE_TELEPORT_BEFORE_STEP4"] = (
+            "1" if self.teleport_before_step4.get() else "0"
+        )
+        environment["ROUTINE_TELEPORT_ON_MP_STAGNATION"] = (
+            "1" if self.teleport_on_mp_stagnation.get() else "0"
+        )
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW
         try:
             self.process = subprocess.Popen(
-                [routine_python(), "-u", "-m", "pc.routine.run_all"],
+                routine_command(),
                 cwd=PROJECT_ROOT,
                 env=environment,
                 stdin=subprocess.PIPE,
@@ -111,6 +185,11 @@ class RoutineController:
         self.desired_end_state = "중지"
         self._set_status("실행 중", "#15803d")
         self.start_button.config(state="disabled")
+        self.low_dungeon_time_check.config(state="disabled")
+        self.minimum_dungeon_minutes_input.config(state="disabled")
+        self.six_oclock_chat_check.config(state="disabled")
+        self.pre_step4_teleport_check.config(state="disabled")
+        self.mp_stagnation_teleport_check.config(state="disabled")
         self.wait_button.config(state="normal")
         self.stop_button.config(state="normal")
         self._append("[GUI] 루틴을 시작합니다.\n")
@@ -161,6 +240,11 @@ class RoutineController:
         colour = "#a16207" if state == "대기" else "#9b1c1c"
         self._set_status(state, colour)
         self.start_button.config(state="normal")
+        self.low_dungeon_time_check.config(state="normal")
+        self.minimum_dungeon_minutes_input.config(state="normal")
+        self.six_oclock_chat_check.config(state="normal")
+        self.pre_step4_teleport_check.config(state="normal")
+        self.mp_stagnation_teleport_check.config(state="normal")
         self.wait_button.config(state="disabled")
         self.stop_button.config(state="disabled")
         self._append(f"[GUI] 프로세스 종료 코드: {return_code}, 상태: {state}\n")
@@ -191,6 +275,15 @@ class RoutineController:
 
 
 def main() -> None:
+    if "--routine-worker" in sys.argv:
+        if getattr(sys, "frozen", False):
+            os.environ.setdefault(
+                "PADDLE_PDX_CACHE_HOME", str(PROJECT_ROOT / ".paddlex")
+            )
+        from pc.routine.run_all import main as run_routine
+
+        run_routine()
+        return
     root = tk.Tk()
     RoutineController(root)
     root.mainloop()

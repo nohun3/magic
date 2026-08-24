@@ -65,7 +65,8 @@ import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 
 DEFAULT_RESTART_DELAY_S = 5.0
-MIN_DUNGEON_MINUTES_FOR_STEP3 = 5
+DEFAULT_MIN_DUNGEON_MINUTES_FOR_STEP3 = 9
+DEFAULT_PRE_STEP4_TELEPORT_SETTLE_S = 1.5
 RESUME_WINDOW_START_HOUR = 7
 RESUME_WINDOW_START_MINUTE = 30
 RESUME_WINDOW_END_HOUR = 8
@@ -181,6 +182,68 @@ def _run_once() -> float:
     restart_delay_s = float(
         settings.get("routine", {}).get("restart_delay_seconds", DEFAULT_RESTART_DELAY_S)
     )
+    routine_cfg = settings.get("routine", {})
+    pause_on_low_dungeon_time = bool(
+        routine_cfg.get("pause_on_low_dungeon_time", True)
+    )
+    pause_override = os.environ.get("ROUTINE_PAUSE_ON_LOW_DUNGEON_TIME")
+    if pause_override is not None:
+        pause_on_low_dungeon_time = pause_override.strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    minimum_dungeon_minutes = int(
+        routine_cfg.get(
+            "minimum_dungeon_minutes_for_step3",
+            DEFAULT_MIN_DUNGEON_MINUTES_FOR_STEP3,
+        )
+    )
+    minimum_minutes_override = os.environ.get("ROUTINE_MIN_DUNGEON_MINUTES")
+    if minimum_minutes_override is not None:
+        minimum_dungeon_minutes = max(0, int(minimum_minutes_override))
+    pause_on_six_oclock_chat = bool(
+        routine_cfg.get("pause_on_six_oclock_chat", True)
+    )
+    six_oclock_override = os.environ.get("ROUTINE_PAUSE_ON_SIX_OCLOCK_CHAT")
+    if six_oclock_override is not None:
+        pause_on_six_oclock_chat = six_oclock_override.strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    teleport_before_step4 = bool(routine_cfg.get("teleport_before_step4", True))
+    teleport_override = os.environ.get("ROUTINE_TELEPORT_BEFORE_STEP4")
+    if teleport_override is not None:
+        teleport_before_step4 = teleport_override.strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    mp_stagnation_override = os.environ.get("ROUTINE_TELEPORT_ON_MP_STAGNATION")
+    if mp_stagnation_override is not None:
+        routine_cfg["teleport_on_mp_stagnation"] = (
+            mp_stagnation_override.strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+        )
+    pre_step4_teleport_settle_s = float(
+        routine_cfg.get(
+            "pre_step4_teleport_settle_seconds",
+            DEFAULT_PRE_STEP4_TELEPORT_SETTLE_S,
+        )
+    )
+    print(
+        "[config] low dungeon-time pause: "
+        f"{'enabled' if pause_on_low_dungeon_time else 'disabled'} "
+        f"(at or below {minimum_dungeon_minutes} minutes)"
+    )
+    print(
+        "[config] teleport before Step 4: "
+        f"{'enabled' if teleport_before_step4 else 'disabled'}"
+    )
+    print(
+        "[config] pause on '오전 6시' chat after Step 3: "
+        f"{'enabled' if pause_on_six_oclock_chat else 'disabled'}"
+    )
+    print(
+        "[config] teleport on MP stagnation: "
+        f"{'enabled' if routine_cfg.get('teleport_on_mp_stagnation', True) else 'disabled'}"
+    )
 
     roi_skill_cfg = settings["roi_skill"]
     skill_panel = SkillPanelLocator(
@@ -252,15 +315,17 @@ def _run_once() -> float:
                     dungeon_minutes = step4.read_and_log_chat(
                         settings, project_root, window_title, routine_capture_cls,
                         korean_reader,
+                        save_if_at_or_below=minimum_dungeon_minutes,
                     )
                 if (
-                    dungeon_minutes is not None
-                    and dungeon_minutes < MIN_DUNGEON_MINUTES_FOR_STEP3
+                    pause_on_low_dungeon_time
+                    and dungeon_minutes is not None
+                    and dungeon_minutes <= minimum_dungeon_minutes
                 ):
                     resume_at = _choose_resume_time(datetime.now())
                     print(
-                        f"[wait] dungeon_minutes={dungeon_minutes} is below "
-                        f"{MIN_DUNGEON_MINUTES_FOR_STEP3}; Step 3 is paused."
+                        f"[wait] dungeon_minutes={dungeon_minutes} is at or below "
+                        f"{minimum_dungeon_minutes}; Step 3 is paused."
                     )
                     print(
                         f"[wait] no input until randomized resume time: "
@@ -300,6 +365,57 @@ def _run_once() -> float:
                 if not step3_result:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
                     return restart_delay_s
+
+                if pause_on_six_oclock_chat:
+                    print("[post-step3] checking chat for '오전 6시'...")
+                    six_oclock_found = step4.chat_contains_text(
+                        settings, project_root, window_title,
+                        routine_capture_cls, korean_reader, "오전 6시",
+                    )
+                    if six_oclock_found:
+                        resume_at = _choose_resume_time(datetime.now())
+                        print(
+                            "[wait] '오전 6시' was found after clicking "
+                            "'발을 내딛는다.'; Step 4 is paused."
+                        )
+                        print(
+                            f"[wait] no input until randomized resume time: "
+                            f"{resume_at:%Y-%m-%d %H:%M:%S}"
+                        )
+                        _wait_until_resume(resume_at)
+                        print(
+                            "[resume] randomized time reached -- "
+                            "restarting from Step 2"
+                        )
+                        ok = step4.ensure_step2(
+                            settings, project_root, window_title, link,
+                            skill_panel, hp_detector, mp_detector,
+                            hotel_text, rent_room_text, ok_button_text,
+                            routine_capture_cls, force_run=True,
+                        )
+                        if not ok:
+                            print(
+                                "[resume] Step 2 failed; returning to "
+                                "normal recovery"
+                            )
+                            return restart_delay_s
+                        skip_dungeon_check_once = True
+                        cycle -= 1
+                        continue
+
+                if teleport_before_step4:
+                    print("[pre-step4] teleporting before ATS starts...")
+                    if not step4.click_teleport_icon(
+                        link, settings, project_root, skill_panel,
+                        window_title, routine_capture_cls,
+                    ):
+                        print("[pre-step4] teleport failed -- restarting from Step 2")
+                        return restart_delay_s
+                    print(
+                        f"[pre-step4] waiting {pre_step4_teleport_settle_s:.1f}s "
+                        "for the teleport transition..."
+                    )
+                    sleep_jittered(max(0.0, pre_step4_teleport_settle_s))
 
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
                 ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,

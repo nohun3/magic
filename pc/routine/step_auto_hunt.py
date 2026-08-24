@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -102,7 +103,8 @@ MAX_TICKS = 7200
 
 def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
                       screen_capture_cls,
-                      reader: KoreanTextReader) -> Optional[int]:
+                      reader: KoreanTextReader,
+                      save_if_at_or_below: Optional[int] = None) -> Optional[int]:
     """OCR chat, print it, and return the dungeon minutes when present."""
     try:
         chat_cfg = settings["chat"]
@@ -133,6 +135,20 @@ def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
         dungeon_minutes = extract_dungeon_minutes(lines)
         if dungeon_minutes is not None:
             print(f"  [chat OCR] dungeon_minutes={dungeon_minutes}")
+            if (
+                save_if_at_or_below is not None
+                and dungeon_minutes <= save_if_at_or_below
+            ):
+                output_dir = project_root / "output" / "low_dungeon_time_chat_roi"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                output_path = output_dir / (
+                    f"roi_chat_{timestamp}_{dungeon_minutes}min.png"
+                )
+                if cv2.imwrite(str(output_path), crop):
+                    print(f"  [chat OCR] low-time ROI saved: {output_path}")
+                else:
+                    print(f"  [chat OCR] failed to save low-time ROI: {output_path}")
         else:
             print("  [chat OCR] dungeon_minutes not found")
         return dungeon_minutes
@@ -141,6 +157,48 @@ def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
         # must never stop ATS monitoring or trigger routine recovery.
         print(f"  [chat OCR] failed: {type(error).__name__}: {error}")
         return None
+
+
+def chat_contains_text(settings: dict, project_root: Path, window_title: str,
+                       screen_capture_cls, reader: KoreanTextReader,
+                       target: str) -> bool:
+    """Return whether OCR text in roi_chatting contains target.
+
+    Whitespace is ignored so OCR output such as ``오전 6 시`` also matches
+    ``오전 6시``. Capture/OCR failures are diagnostic and return False.
+    """
+    try:
+        chat_cfg = settings["chat"]
+        template = cv2.imread(str(project_root / chat_cfg["template"]))
+        if template is None:
+            print("  [chat OCR] template could not be loaded")
+            return False
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        match = locate_template(
+            frame, template, float(chat_cfg.get("match_threshold", 0.5))
+        )
+        if match is None:
+            print("  [chat OCR] chat region not found")
+            return False
+        region = match.region
+        crop = frame[
+            region.top:region.top + region.height,
+            region.left:region.left + region.width,
+        ]
+        lines = reader.read_lines(crop)
+        compact_target = "".join(target.split())
+        print(f"  [chat OCR] looking for {target!r} in {len(lines)} line(s)")
+        for index, line in enumerate(lines, start=1):
+            print(f"    [{index:02d}] {line}")
+            if compact_target in "".join(line.split()):
+                print(f"  [chat OCR] found {target!r}")
+                return True
+        print(f"  [chat OCR] {target!r} not found")
+        return False
+    except Exception as error:
+        print(f"  [chat OCR] text check failed: {type(error).__name__}: {error}")
+        return False
 
 
 def build_ats_off_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -235,6 +293,19 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
     for the MAX_TICKS safety fallback instead (caller should NOT hand
     off automatically in that case -- something's likely wrong, e.g. HP/
     MP stopped being readable)."""
+    routine_cfg = settings.get("routine", {})
+    teleport_on_mp_stagnation = bool(
+        routine_cfg.get("teleport_on_mp_stagnation", True)
+    )
+    mp_stagnant_ticks_before_teleport = max(
+        1,
+        int(
+            routine_cfg.get(
+                "mp_stagnant_ticks_before_teleport",
+                MP_STAGNANT_TICKS_BEFORE_TELEPORT,
+            )
+        ),
+    )
     last_mp_current: Optional[int] = None
     stagnant_ticks = 0
     low_mp_ticks = 0
@@ -339,13 +410,13 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
         else:
             low_heal_ticks = 0
 
-        if not handled_emergency:
+        if not handled_emergency and teleport_on_mp_stagnation:
             if last_mp_current is not None and mp.current >= last_mp_current:
                 stagnant_ticks += 1
             else:
                 stagnant_ticks = 0
 
-            if stagnant_ticks >= MP_STAGNANT_TICKS_BEFORE_TELEPORT:
+            if stagnant_ticks >= mp_stagnant_ticks_before_teleport:
                 print(f"    MP hasn't decreased for {stagnant_ticks} consecutive ticks -- teleporting to find monsters")
                 click_teleport_icon(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
                 stagnant_ticks = 0

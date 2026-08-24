@@ -8,6 +8,9 @@ __pycache__/
 # contains live gameplay screenshots (character/guild names, chat text)
 # that shouldn't be published.
 output/
+build/
+dist/*
+!dist/RoutineAssistant-win64.zip
 
 # Arduino build artifacts (arduino-cli writes here when --build-path isn't given)
 arduino/**/build/
