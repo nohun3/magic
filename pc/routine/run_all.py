@@ -203,14 +203,6 @@ def _run_once() -> float:
     minimum_minutes_override = os.environ.get("ROUTINE_MIN_DUNGEON_MINUTES")
     if minimum_minutes_override is not None:
         minimum_dungeon_minutes = max(0, int(minimum_minutes_override))
-    pause_on_six_oclock_chat = bool(
-        routine_cfg.get("pause_on_six_oclock_chat", True)
-    )
-    six_oclock_override = os.environ.get("ROUTINE_PAUSE_ON_SIX_OCLOCK_CHAT")
-    if six_oclock_override is not None:
-        pause_on_six_oclock_chat = six_oclock_override.strip().lower() in {
-            "1", "true", "yes", "on",
-        }
     teleport_before_step4 = bool(routine_cfg.get("teleport_before_step4", True))
     teleport_override = os.environ.get("ROUTINE_TELEPORT_BEFORE_STEP4")
     if teleport_override is not None:
@@ -238,10 +230,6 @@ def _run_once() -> float:
     print(
         "[config] teleport before Step 4: "
         f"{'enabled' if teleport_before_step4 else 'disabled'}"
-    )
-    print(
-        "[config] pause on '오전 6시' chat after Step 3: "
-        f"{'enabled' if pause_on_six_oclock_chat else 'disabled'}"
     )
     print(
         "[config] teleport on MP stagnation: "
@@ -352,43 +340,7 @@ def _run_once() -> float:
                     settings, project_root, window_title, link, skill_panel,
                     wasteland_text, gate_dest_text, step_forward_text, korean_reader,
                     routine_capture_cls, hp_detector=hp_detector,
-                    after_forward_click=(
-                        lambda: step4.chat_contains_text(
-                            settings, project_root, window_title,
-                            routine_capture_cls, korean_reader, "오전 6시",
-                        )
-                    ) if pause_on_six_oclock_chat else None,
                 )
-                if step3_result is step3.Step3Result.WAIT_FOR_DUNGEON_RESET:
-                    resume_at = _choose_resume_time(datetime.now())
-                    print(
-                        "[wait] '오전 6시' was found immediately after "
-                        "clicking '발을 내딛는다.'; entering wait mode."
-                    )
-                    print(
-                        f"[wait] no input until randomized resume time: "
-                        f"{resume_at:%Y-%m-%d %H:%M:%S}"
-                    )
-                    _wait_until_resume(resume_at)
-                    print(
-                        "[resume] randomized time reached -- "
-                        "restarting from Step 2"
-                    )
-                    ok = step4.ensure_step2(
-                        settings, project_root, window_title, link,
-                        skill_panel, hp_detector, mp_detector,
-                        hotel_text, rent_room_text, ok_button_text,
-                        routine_capture_cls, force_run=True,
-                    )
-                    if not ok:
-                        print(
-                            "[resume] Step 2 failed; returning to "
-                            "normal recovery"
-                        )
-                        return restart_delay_s
-                    skip_dungeon_check_once = True
-                    cycle -= 1
-                    continue
                 if step3_result is None:
                     print("[3단계] recovery requested -> running [2단계]")
                     ok = step4.ensure_step2(

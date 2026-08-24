@@ -46,7 +46,6 @@ class RoutineController:
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.pause_on_low_dungeon_time = tk.BooleanVar(value=True)
         self.minimum_dungeon_minutes = tk.StringVar(value="9")
-        self.pause_on_six_oclock_chat = tk.BooleanVar(value=True)
         self.teleport_before_step4 = tk.BooleanVar(value=True)
         self.teleport_on_mp_stagnation = tk.BooleanVar(value=True)
         self.desired_end_state = "중지"
@@ -98,13 +97,6 @@ class RoutineController:
         secondary_options = tk.Frame(root, padx=12, pady=0)
         secondary_options.pack(fill="x")
 
-        self.six_oclock_chat_check = tk.Checkbutton(
-            secondary_options,
-            text="발을 내딛은 후 채팅에 '오전 6시' 감지 시 대기",
-            variable=self.pause_on_six_oclock_chat,
-        )
-        self.six_oclock_chat_check.pack(anchor="w")
-
         self.pre_step4_teleport_check = tk.Checkbutton(
             secondary_options,
             text="4단계 시작 전 텔레포트",
@@ -155,9 +147,6 @@ class RoutineController:
             "1" if self.pause_on_low_dungeon_time.get() else "0"
         )
         environment["ROUTINE_MIN_DUNGEON_MINUTES"] = str(minimum_dungeon_minutes)
-        environment["ROUTINE_PAUSE_ON_SIX_OCLOCK_CHAT"] = (
-            "1" if self.pause_on_six_oclock_chat.get() else "0"
-        )
         environment["ROUTINE_TELEPORT_BEFORE_STEP4"] = (
             "1" if self.teleport_before_step4.get() else "0"
         )
@@ -189,7 +178,6 @@ class RoutineController:
         self.start_button.config(state="disabled")
         self.low_dungeon_time_check.config(state="disabled")
         self.minimum_dungeon_minutes_input.config(state="disabled")
-        self.six_oclock_chat_check.config(state="disabled")
         self.pre_step4_teleport_check.config(state="disabled")
         self.mp_stagnation_teleport_check.config(state="disabled")
         self.wait_button.config(state="normal")
@@ -244,7 +232,6 @@ class RoutineController:
         self.start_button.config(state="normal")
         self.low_dungeon_time_check.config(state="normal")
         self.minimum_dungeon_minutes_input.config(state="normal")
-        self.six_oclock_chat_check.config(state="normal")
         self.pre_step4_teleport_check.config(state="normal")
         self.mp_stagnation_teleport_check.config(state="normal")
         self.wait_button.config(state="disabled")

@@ -159,48 +159,6 @@ def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
         return None
 
 
-def chat_contains_text(settings: dict, project_root: Path, window_title: str,
-                       screen_capture_cls, reader: KoreanTextReader,
-                       target: str) -> bool:
-    """Return whether OCR text in roi_chatting contains target.
-
-    Whitespace is ignored so OCR output such as ``오전 6 시`` also matches
-    ``오전 6시``. Capture/OCR failures are diagnostic and return False.
-    """
-    try:
-        chat_cfg = settings["chat"]
-        template = cv2.imread(str(project_root / chat_cfg["template"]))
-        if template is None:
-            print("  [chat OCR] template could not be loaded")
-            return False
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        match = locate_template(
-            frame, template, float(chat_cfg.get("match_threshold", 0.5))
-        )
-        if match is None:
-            print("  [chat OCR] chat region not found")
-            return False
-        region = match.region
-        crop = frame[
-            region.top:region.top + region.height,
-            region.left:region.left + region.width,
-        ]
-        lines = reader.read_lines(crop)
-        compact_target = "".join(target.split())
-        print(f"  [chat OCR] looking for {target!r} in {len(lines)} line(s)")
-        for index, line in enumerate(lines, start=1):
-            print(f"    [{index:02d}] {line}")
-            if compact_target in "".join(line.split()):
-                print(f"  [chat OCR] found {target!r}")
-                return True
-        print(f"  [chat OCR] {target!r} not found")
-        return False
-    except Exception as error:
-        print(f"  [chat OCR] text check failed: {type(error).__name__}: {error}")
-        return False
-
-
 def build_ats_off_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["ats_off"], project_root, panel=skill_panel)
 

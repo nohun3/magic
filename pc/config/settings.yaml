@@ -334,9 +334,6 @@ routine:
   # Step 3 while still logging the reading and saving the low-time chat ROI.
   pause_on_low_dungeon_time: true
   minimum_dungeon_minutes_for_step3: 9
-  # After clicking "발을 내딛는다.", pause if chat OCR contains "오전 6시".
-  # This is independent of pause_on_low_dungeon_time.
-  pause_on_six_oclock_chat: true
   # After Step 3 succeeds, teleport once before enabling ATS in Step 4.
   teleport_before_step4: true
   pre_step4_teleport_settle_seconds: 1.5

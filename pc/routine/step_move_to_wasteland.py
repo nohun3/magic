@@ -51,9 +51,8 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -82,12 +81,6 @@ DIALOG_OPEN_SETTLE_S = 0.6
 # How long to wait after clicking the destination text before the
 # teleport gate has finished rendering in the world.
 GATE_RENDER_SETTLE_S = 0.8
-FORWARD_CLICK_CHAT_SETTLE_S = 0.5
-
-
-class Step3Result(Enum):
-    WAIT_FOR_DUNGEON_RESET = "wait_for_dungeon_reset"
-
 WASTELAND_NEEDLES = ("오렌", "버땅")
 STEP_FORWARD_NEEDLES = ("발을", "내딛는다")
 
@@ -494,9 +487,7 @@ def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         wasteland_text: RememberedDialogText, gate_dest_text: RememberedDialogText, step_forward_text: RememberedDialogText,
-        reader: KoreanTextReader, screen_capture_cls, hp_detector=None,
-        after_forward_click: Optional[Callable[[], bool]] = None,
-        ) -> Optional[bool] | Step3Result:
+        reader: KoreanTextReader, screen_capture_cls, hp_detector=None) -> Optional[bool]:
     """Full [3단계]: the 5 sub-actions from the module docstring plus a
     final location check, as a reusable function (for
     pc/routine/run_all.py) instead of a script entry point. Takes
@@ -510,16 +501,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
     gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
-
-    def wait_requested_after_forward_click() -> bool:
-        if after_forward_click is None:
-            return False
-        print(
-            f"  waiting {FORWARD_CLICK_CHAT_SETTLE_S}s before checking "
-            "chat immediately after the forward click..."
-        )
-        sleep_jittered(FORWARD_CLICK_CHAT_SETTLE_S)
-        return after_forward_click()
 
     print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
@@ -694,9 +675,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
         return False
-    if wait_requested_after_forward_click():
-        print("  '오전 6시' found -- requesting dungeon wait mode")
-        return Step3Result.WAIT_FOR_DUNGEON_RESET
 
     print("[6/6] verifying location changed to '버림받은 자들의 땅'...")
     location_content_locator = build_location_content_locator(settings, project_root)
@@ -729,9 +707,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 retry_ok = click_region_once(link, converter, retry_target)
                 print(f"    retry click -> {'ok' if retry_ok else 'FAILED (missing ACK)'}")
                 retried_click = True
-                if retry_ok and wait_requested_after_forward_click():
-                    print("  '오전 6시' found -- requesting dungeon wait mode")
-                    return Step3Result.WAIT_FOR_DUNGEON_RESET
 
     print(f"[stop] location never confirmed as '버림받은 자들의 땅' within {verify_timeout_s:.1f}s.")
     return False
