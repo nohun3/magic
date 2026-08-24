@@ -9,13 +9,13 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 Push-Location $projectRoot
 try {
-    & $python -m PyInstaller --noconfirm --clean RoutineAssistant.spec
+    & $python -m PyInstaller --noconfirm --clean STM200.spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }
 
-    $releaseDir = Join-Path $projectRoot "dist\RoutineAssistant"
-    $zipPath = Join-Path $projectRoot "dist\RoutineAssistant-win64.zip"
+    $releaseDir = Join-Path $projectRoot "dist\STM200"
+    $zipPath = Join-Path $projectRoot "dist\STM200-win64.zip"
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force
     }

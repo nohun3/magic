@@ -10,7 +10,7 @@ __pycache__/
 output/
 build/
 dist/*
-!dist/RoutineAssistant-win64.zip
+!dist/*-win64.zip
 
 # Arduino build artifacts (arduino-cli writes here when --build-path isn't given)
 arduino/**/build/
