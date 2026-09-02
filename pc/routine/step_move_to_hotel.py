@@ -83,6 +83,9 @@ EVENT_DIALOG_SETTLE_S = 0.6
 EVENT_TELEPORT_SETTLE_S = 1.5
 EVENT_NPC_SETTLE_S = 0.6
 MAX_EVENT_RESTARTS_PER_STEP2 = 3
+HASTE_DOUBLE_CLICK_COUNT = 6
+HASTE_CLICK_INTERVAL_MIN_S = 1.0
+HASTE_CLICK_INTERVAL_MAX_S = 2.0
 EVENT_MERCHANT_NEEDLES = ("기란", "잡화", "상인")
 
 # Registered once by run_all after roi_chatting is located. All shared click
@@ -116,6 +119,14 @@ def build_mana_buff_detector(settings: dict, project_root: Path, buff_panel: Ski
 
 def build_mana_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["mana"], project_root, panel=skill_panel)
+
+
+def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["buffs"]["haste"], project_root, panel=buff_panel)
+
+
+def build_haste_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["haste"], project_root, panel=skill_panel)
 
 
 def build_event_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -507,6 +518,60 @@ def ensure_mana(settings: dict, project_root: Path, link: SerialLink,
 
     ok = double_click_region(link, converter, mana_icon.region)
     print(f"  [mana] double-click -> {'ok' if ok else 'FAILED (continuing to [3단계])'}")
+
+
+def ensure_haste_before_step3(
+    settings: dict,
+    project_root: Path,
+    link: SerialLink,
+    skill_panel: SkillPanelLocator,
+    window_title: str,
+    screen_capture_cls,
+) -> bool | None:
+    """Apply haste when absent, then tell the caller to restart Step 2."""
+    buff_panel = build_buff_panel(settings, project_root)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    haste_buff = build_haste_buff_detector(
+        settings, project_root, buff_panel
+    ).measure(frame)
+    if haste_buff.present:
+        print(
+            f"  haste buff active (score={haste_buff.match_score:.3f}) "
+            "-- proceeding to [3단계]"
+        )
+        return None
+
+    print(
+        f"  haste buff not active (score={haste_buff.match_score:.3f}) "
+        f"-- double-clicking icon_haste {HASTE_DOUBLE_CLICK_COUNT} times"
+    )
+    if not ensure_skill_tab(link):
+        print("  [haste] F2 keypress not ACKed")
+        return False
+
+    for attempt in range(1, HASTE_DOUBLE_CLICK_COUNT + 1):
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        haste_icon = build_haste_icon_detector(
+            settings, project_root, skill_panel
+        ).measure(frame)
+        if not haste_icon.present or haste_icon.region is None:
+            print(f"  [haste] icon_haste not present ({attempt}/{HASTE_DOUBLE_CLICK_COUNT})")
+            return False
+        if not double_click_region(link, converter, haste_icon.region):
+            print(f"  [haste] double-click failed ({attempt}/{HASTE_DOUBLE_CLICK_COUNT})")
+            return False
+        print(f"  [haste] double-click {attempt}/{HASTE_DOUBLE_CLICK_COUNT} -> ok")
+        if attempt < HASTE_DOUBLE_CLICK_COUNT:
+            sleep_jittered(
+                random.uniform(
+                    HASTE_CLICK_INTERVAL_MIN_S,
+                    HASTE_CLICK_INTERVAL_MAX_S,
+                ),
+                jitter_seconds=0.0,
+            )
+
+    print("  [haste] sequence complete -- restarting [2단계]")
+    return True
 
 
 def _capture_and_convert(window_title: str, screen_capture_cls):
