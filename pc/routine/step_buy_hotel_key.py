@@ -69,9 +69,9 @@ TELEPORT_SETTLE_S = 1.5
 # dialog/prompt has finished rendering.
 DIALOG_STEP_SETTLE_S = 0.6
 
-HOTEL_NEEDLES = ("오렌", "여관")
 RENT_ROOM_NEEDLES = ("방을", "대여한다")
 OK_NEEDLES = ("OK",)
+HOTEL_LOCATION_ALIASES = ("오렌", "모렌")
 
 
 def _select_rent_room(lines):
@@ -90,6 +90,23 @@ def _select_rent_room(lines):
     return None
 
 
+def _select_hotel(lines):
+    """Select the inn row even when OCR misreads the tiny ``[오렌]`` label.
+
+    On the live talking-scroll dialog PaddleOCR consistently returned
+    ``[모 렌] 여관`` for the visibly correct ``[오렌] 여관`` row. Accept only
+    the real location or that observed alias together with ``여관``; matching
+    ``여관`` alone would be too broad if another inn entry is added later.
+    """
+    for text, box in lines:
+        compact = "".join(text.split())
+        if "여관" in compact and any(
+            location in compact for location in HOTEL_LOCATION_ALIASES
+        ):
+            return box
+    return None
+
+
 def _build_dialog_content_locator(settings: dict, project_root: Path) -> WindowContentLocator:
     dialog_cfg = settings["dialog"]
     border = SkillPanelLocator(project_root / dialog_cfg["template"], dialog_cfg.get("match_threshold", 0.85))
@@ -104,7 +121,7 @@ def build_hotel_text_locator(settings: dict, project_root: Path, reader: KoreanT
     return RememberedDialogText(
         _build_dialog_content_locator(settings, project_root),
         reader,
-        first_matching(needles_match_fn(*HOTEL_NEEDLES)),
+        _select_hotel,
         preprocess=mask_non_yellow,
         merge_rows=True,
     )
