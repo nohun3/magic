@@ -68,9 +68,44 @@ def first_matching(match_fn: MatchFn) -> SelectorFn:
     return select
 
 
+def merge_boxes_by_row(lines: List[Tuple[str, Region]]) -> List[Tuple[str, Region]]:
+    """Merge adjacent OCR boxes that belong to the same rendered row.
+
+    PaddleOCR sometimes splits one menu entry into multiple boxes. Rows are
+    separated using their vertical centres, while text within a row is joined
+    from left to right and its boxes are replaced by one bounding rectangle.
+    """
+    remaining = list(lines)
+    merged: List[Tuple[str, Region]] = []
+    while remaining:
+        _, seed = min(
+            remaining,
+            key=lambda item: (item[1].top + item[1].height / 2, item[1].left),
+        )
+        seed_center_y = seed.top + seed.height / 2
+        row = [
+            item for item in remaining
+            if abs((item[1].top + item[1].height / 2) - seed_center_y)
+            <= max(seed.height, item[1].height) * 0.5
+        ]
+        for item in row:
+            remaining.remove(item)
+        row.sort(key=lambda item: item[1].left)
+        text = " ".join(value.strip() for value, _ in row if value.strip())
+        left = min(box.left for _, box in row)
+        top = min(box.top for _, box in row)
+        right = max(box.left + box.width for _, box in row)
+        bottom = max(box.top + box.height for _, box in row)
+        merged.append(
+            (text, Region(left=left, top=top, width=right - left, height=bottom - top))
+        )
+    return merged
+
+
 class RememberedDialogText:
     def __init__(self, content_locator: WindowContentLocator, reader: KoreanTextReader, selector: SelectorFn,
-                 preprocess: Optional[Callable[[np.ndarray], np.ndarray]] = None, cache: bool = True):
+                 preprocess: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+                 cache: bool = True, merge_rows: bool = False):
         """`preprocess`, if given, runs on the content crop before OCR --
         e.g. pc/detector/color_mask.py's mask_non_yellow() to blank out
         everything except a dialog's yellow "action" text, which cut OCR
@@ -89,6 +124,7 @@ class RememberedDialogText:
         self._selector = selector
         self._preprocess = preprocess
         self._cache_enabled = cache
+        self._merge_rows = merge_rows
         self._cached_offset: Optional[Region] = None  # relative to content_region's top-left
 
     def find(self, frame: np.ndarray) -> Optional[Region]:
@@ -109,7 +145,10 @@ class RememberedDialogText:
                 return None
             if self._preprocess is not None:
                 crop = self._preprocess(crop)
-            off = self._selector(self._reader.read_lines_with_boxes(crop))
+            lines = self._reader.read_lines_with_boxes(crop)
+            if self._merge_rows:
+                lines = merge_boxes_by_row(lines)
+            off = self._selector(lines)
             if off is None:
                 return None
             if self._cache_enabled:

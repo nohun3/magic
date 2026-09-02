@@ -56,8 +56,8 @@ from pc.detector.any_presence_detector import AnyPresenceDetector, build_icon_de
 from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.window_content import ContentOffset, WindowContentLocator  # noqa: E402
-from pc.detector.chat_reader import KoreanTextReader, needles_match_fn  # noqa: E402
-from pc.detector.remembered_text import RememberedDialogText, first_matching  # noqa: E402
+from pc.detector.chat_reader import KoreanTextReader  # noqa: E402
+from pc.detector.remembered_text import RememberedDialogText  # noqa: E402
 from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
@@ -126,6 +126,33 @@ def build_talking_scroll_detector(settings: dict, project_root: Path, skill_pane
     return build_icon_detector(settings["icons"]["talking_scroll"], project_root, panel=skill_panel)
 
 
+def _select_event_merchant(lines) -> Region | None:
+    """Select ``[기란] 잡화 상인`` even when OCR splits one row.
+
+    PaddleOCR can return the location, job, and NPC type as three adjacent
+    boxes. Group boxes whose vertical centres belong to the same rendered
+    row, then require all three needles in that combined row. Requiring
+    ``기란`` prevents the later generic ``잡화 상인`` entry from matching.
+    """
+    for _, seed_box in lines:
+        seed_center_y = seed_box.top + seed_box.height / 2
+        row = [
+            (text, box) for text, box in lines
+            if abs((box.top + box.height / 2) - seed_center_y)
+            <= max(seed_box.height, box.height) * 0.5
+        ]
+        row.sort(key=lambda item: item[1].left)
+        combined = "".join("".join(text.split()) for text, _ in row)
+        if not all(needle in combined for needle in EVENT_MERCHANT_NEEDLES):
+            continue
+        left = min(box.left for _, box in row)
+        top = min(box.top for _, box in row)
+        right = max(box.left + box.width for _, box in row)
+        bottom = max(box.top + box.height for _, box in row)
+        return Region(left=left, top=top, width=right - left, height=bottom - top)
+    return None
+
+
 def build_event_merchant_text_locator(settings: dict, project_root: Path,
                                       reader: KoreanTextReader) -> RememberedDialogText:
     dialog_cfg = settings["dialog"]
@@ -139,9 +166,62 @@ def build_event_merchant_text_locator(settings: dict, project_root: Path,
     return RememberedDialogText(
         content,
         reader,
-        first_matching(needles_match_fn(*EVENT_MERCHANT_NEEDLES)),
+        _select_event_merchant,
         preprocess=mask_non_yellow,
+        merge_rows=True,
     )
+
+
+def diagnose_event_merchant_ocr(settings: dict, project_root: Path,
+                                frame: np.ndarray,
+                                reader: KoreanTextReader) -> None:
+    """Log and save the exact pixels used by the event merchant OCR.
+
+    This is deliberately best-effort: diagnostics must never replace the
+    original "text not found" result with an unrelated file/OCR exception.
+    """
+    try:
+        dialog_cfg = settings["dialog"]
+        border = SkillPanelLocator(
+            project_root / dialog_cfg["template"],
+            dialog_cfg.get("match_threshold", 0.85),
+        )
+        content = WindowContentLocator(
+            border, ContentOffset(**dialog_cfg["content_offset"])
+        )
+        crop = content.crop_content(frame)
+
+        timestamp_ms = int(time.time() * 1000)
+        output_dir = project_root / "output" / "event_merchant_ocr"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = output_dir / f"{timestamp_ms}_frame.png"
+        cv2.imwrite(str(frame_path), frame)
+        print(f"  [event OCR] full frame saved: {frame_path}")
+
+        if crop is None or crop.size == 0:
+            print("  [event OCR] dialog content region not found")
+            return
+
+        masked = mask_non_yellow(crop)
+        crop_path = output_dir / f"{timestamp_ms}_content.png"
+        masked_path = output_dir / f"{timestamp_ms}_yellow_mask.png"
+        cv2.imwrite(str(crop_path), crop)
+        cv2.imwrite(str(masked_path), masked)
+        print(f"  [event OCR] dialog content saved: {crop_path}")
+        print(f"  [event OCR] yellow mask saved: {masked_path}")
+
+        lines = reader.read_lines_with_boxes(masked)
+        if not lines:
+            print("  [event OCR] recognized 0 line(s) after yellow mask")
+            return
+        print(f"  [event OCR] recognized {len(lines)} line(s) after yellow mask:")
+        for index, (text, box) in enumerate(lines, start=1):
+            print(f"    [{index:02d}] {text!r} box={box}")
+    except Exception as error:
+        print(
+            f"  [event OCR] diagnostic failed: "
+            f"{type(error).__name__}: {error}"
+        )
 
 
 def build_buff_panel(settings: dict, project_root: Path) -> SkillPanelLocator:
@@ -330,6 +410,7 @@ def _handle_event_if_present(
     skill_panel: SkillPanelLocator,
     screen_capture_cls,
     event_merchant_text: RememberedDialogText,
+    korean_reader: KoreanTextReader,
 ) -> bool | None:
     """Handle the event before meditation when buff_event is absent.
 
@@ -373,6 +454,9 @@ def _handle_event_if_present(
     merchant = event_merchant_text.find(frame)
     if merchant is None:
         print("  [event] '[기란] 잡화 상인' text not found")
+        diagnose_event_merchant_ocr(
+            settings, project_root, frame, korean_reader
+        )
         return False
     if not click_region_once(link, converter, merchant):
         print("  [event] '[기란] 잡화 상인' click failed")
@@ -465,7 +549,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
 
         event_result = _handle_event_if_present(
             settings, project_root, window_title, link, skill_panel,
-            screen_capture_cls, event_merchant_text,
+            screen_capture_cls, event_merchant_text, korean_reader,
         )
         if event_result is False:
             return False

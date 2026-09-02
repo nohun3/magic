@@ -101,7 +101,13 @@ def build_hotel_text_locator(settings: dict, project_root: Path, reader: KoreanT
     # dialog, same speedup/accuracy reasoning as
     # step_move_to_wasteland.py's post-gate dialogs (see
     # mask_non_yellow()'s docstring).
-    return RememberedDialogText(_build_dialog_content_locator(settings, project_root), reader, first_matching(needles_match_fn(*HOTEL_NEEDLES)), preprocess=mask_non_yellow)
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        first_matching(needles_match_fn(*HOTEL_NEEDLES)),
+        preprocess=mask_non_yellow,
+        merge_rows=True,
+    )
 
 
 def build_rent_room_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
