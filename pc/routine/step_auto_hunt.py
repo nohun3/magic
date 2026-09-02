@@ -495,8 +495,7 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
         )
 
         haste_result = step2.ensure_haste_before_step3(
-            settings, project_root, link, skill_panel, window_title,
-            screen_capture_cls,
+            settings, project_root, link, window_title, screen_capture_cls,
         )
         if haste_result is False:
             print("  [2단계] haste preparation failed.")

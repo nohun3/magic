@@ -141,6 +141,9 @@ buffs:
 # a toggle that's off) -- see pc/detector/presence_detector.py.
 # Searched only within the roi_skill panel above, not the whole frame.
 icons:
+  close:
+    template: templates/icon_close.png
+    match_threshold: 0.85
   hotel_key:
     templates:
     - templates/icon_hotel_key.png

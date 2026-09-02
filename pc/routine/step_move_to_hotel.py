@@ -83,9 +83,9 @@ EVENT_DIALOG_SETTLE_S = 0.6
 EVENT_TELEPORT_SETTLE_S = 1.5
 EVENT_NPC_SETTLE_S = 0.6
 MAX_EVENT_RESTARTS_PER_STEP2 = 3
-HASTE_DOUBLE_CLICK_COUNT = 6
-HASTE_CLICK_INTERVAL_MIN_S = 1.0
-HASTE_CLICK_INTERVAL_MAX_S = 2.0
+HASTE_KEY_HOLD_MIN_S = 6.0
+HASTE_KEY_HOLD_MAX_S = 7.0
+CLOSE_CLICK_SETTLE_S = 0.3
 EVENT_MERCHANT_NEEDLES = ("기란", "잡화", "상인")
 
 # Registered once by run_all after roi_chatting is located. All shared click
@@ -123,10 +123,6 @@ def build_mana_icon_detector(settings: dict, project_root: Path, skill_panel: Sk
 
 def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["buffs"]["haste"], project_root, panel=buff_panel)
-
-
-def build_haste_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["haste"], project_root, panel=skill_panel)
 
 
 def build_event_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -238,6 +234,40 @@ def diagnose_event_merchant_ocr(settings: dict, project_root: Path,
 def build_buff_panel(settings: dict, project_root: Path) -> SkillPanelLocator:
     buff_roi_cfg = settings["roi_buff"]
     return SkillPanelLocator(project_root / buff_roi_cfg["template"], buff_roi_cfg["match_threshold"])
+
+
+def _capture_for_buff_check(
+    settings: dict,
+    project_root: Path,
+    window_title: str,
+    link: SerialLink,
+    screen_capture_cls,
+) -> np.ndarray:
+    """Close one visible full-screen icon_close before inspecting roi_buff."""
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    close_cfg = settings["icons"]["close"]
+    close_template = cv2.imread(str(project_root / close_cfg["template"]))
+    if close_template is None:
+        print("  [buff check warn] icon_close template could not be loaded")
+        return frame
+
+    close_match = locate_template(
+        frame, close_template, close_cfg.get("match_threshold", 0.85)
+    )
+    if close_match is None:
+        return frame
+
+    if not click_region_once(link, converter, close_match.region):
+        print("  [buff check warn] icon_close click failed -- checking current frame")
+        return frame
+
+    print(
+        f"  [buff check] icon_close found "
+        f"(score={close_match.score:.3f}) -- clicked once"
+    )
+    sleep_jittered(CLOSE_CLICK_SETTLE_S)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    return frame
 
 
 def is_meditation_buff_active(settings: dict, project_root: Path, frame: np.ndarray) -> PresenceResult:
@@ -356,7 +386,9 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     -- the cast can silently fail when MP is very low, which is exactly
     the state [2단계] always starts in right after [4단계]."""
     buff_panel = build_buff_panel(settings, project_root)
-    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
     if buff_result.present:
         print("  meditation buff active -- ok")
@@ -383,7 +415,9 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     # live: the retry click ACKed fine but the buff still hadn't come
     # up). Re-check the buff itself instead of trusting the ACK alone.
     sleep_jittered(0.6)
-    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     retry_buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
     if retry_buff_result.present:
         print("  [retry] meditation buff active -- ok")
@@ -430,7 +464,9 @@ def _handle_event_if_present(
     """
     if not settings.get("step2", {}).get("event_recovery_enabled", True):
         return None
-    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     buff_panel = build_buff_panel(settings, project_root)
     event_buff = build_event_buff_detector(
         settings, project_root, buff_panel
@@ -499,7 +535,9 @@ def ensure_mana(settings: dict, project_root: Path, link: SerialLink,
                 screen_capture_cls) -> None:
     """Activate mana buff when absent; absence/failure is non-fatal."""
     buff_panel = build_buff_panel(settings, project_root)
-    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     mana_buff = build_mana_buff_detector(settings, project_root, buff_panel).measure(frame)
     if mana_buff.present:
         print("  mana buff active -- ok")
@@ -524,13 +562,14 @@ def ensure_haste_before_step3(
     settings: dict,
     project_root: Path,
     link: SerialLink,
-    skill_panel: SkillPanelLocator,
     window_title: str,
     screen_capture_cls,
 ) -> bool | None:
     """Apply haste when absent, then tell the caller to restart Step 2."""
     buff_panel = build_buff_panel(settings, project_root)
-    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     haste_buff = build_haste_buff_detector(
         settings, project_root, buff_panel
     ).measure(frame)
@@ -541,36 +580,36 @@ def ensure_haste_before_step3(
         )
         return None
 
+    hold_seconds = random.uniform(HASTE_KEY_HOLD_MIN_S, HASTE_KEY_HOLD_MAX_S)
     print(
         f"  haste buff not active (score={haste_buff.match_score:.3f}) "
-        f"-- double-clicking icon_haste {HASTE_DOUBLE_CLICK_COUNT} times"
+        f"-- holding F6 for {hold_seconds:.1f}s"
     )
-    if not ensure_skill_tab(link):
-        print("  [haste] F2 keypress not ACKed")
+    key_down_ack = link.send_and_wait("KEYDOWN", "F6")
+    if key_down_ack is None or not key_down_ack.ok:
+        print("  [haste] F6 KEYDOWN not ACKed")
         return False
 
-    for attempt in range(1, HASTE_DOUBLE_CLICK_COUNT + 1):
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        haste_icon = build_haste_icon_detector(
-            settings, project_root, skill_panel
-        ).measure(frame)
-        if not haste_icon.present or haste_icon.region is None:
-            print(f"  [haste] icon_haste not present ({attempt}/{HASTE_DOUBLE_CLICK_COUNT})")
-            return False
-        if not double_click_region(link, converter, haste_icon.region):
-            print(f"  [haste] double-click failed ({attempt}/{HASTE_DOUBLE_CLICK_COUNT})")
-            return False
-        print(f"  [haste] double-click {attempt}/{HASTE_DOUBLE_CLICK_COUNT} -> ok")
-        if attempt < HASTE_DOUBLE_CLICK_COUNT:
-            sleep_jittered(
-                random.uniform(
-                    HASTE_CLICK_INTERVAL_MIN_S,
-                    HASTE_CLICK_INTERVAL_MAX_S,
-                ),
-                jitter_seconds=0.0,
-            )
+    key_up_ack = None
+    try:
+        hold_deadline = time.monotonic() + hold_seconds
+        while True:
+            remaining = hold_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            sleep_jittered(min(1.0, remaining), jitter_seconds=0.0)
+            if time.monotonic() < hold_deadline:
+                # Keep Arduino's 5-second connection watchdog satisfied while
+                # F6 is intentionally held for longer than that timeout.
+                link.send("PING")
+    finally:
+        key_up_ack = link.send_and_wait("KEYUP", "F6")
 
-    print("  [haste] sequence complete -- restarting [2단계]")
+    if key_up_ack is None or not key_up_ack.ok:
+        print("  [haste] F6 KEYUP not ACKed")
+        return False
+
+    print(f"  [haste] F6 held for {hold_seconds:.1f}s and released -- restarting [2단계]")
     return True
 
 
@@ -632,7 +671,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     # Do not toggle/cancel meditation when it is already active. The
     # icon is a toggle-like action in practice, so blindly double-
     # clicking it at every [2단계] entry can undo the state we need.
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    frame = _capture_for_buff_check(
+        settings, project_root, window_title, link, screen_capture_cls
+    )
     meditation_buff = is_meditation_buff_active(settings, project_root, frame)
     if meditation_buff.present:
         print("  meditation buff already active -- skipping icon_meditation double-click")
