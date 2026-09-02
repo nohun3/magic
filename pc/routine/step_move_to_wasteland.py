@@ -81,8 +81,15 @@ DIALOG_OPEN_SETTLE_S = 0.6
 # How long to wait after clicking the destination text before the
 # teleport gate has finished rendering in the world.
 GATE_RENDER_SETTLE_S = 0.8
+NPC_TELEPORTER_RENDER_SETTLE_S = 1.5
+NPC_TELEPORTER_MAX_ATTEMPTS = 5
+NPC_TELEPORTER_RETRY_INTERVAL_S = 0.6
 WASTELAND_NEEDLES = ("오렌", "버땅")
 STEP_FORWARD_NEEDLES = ("발을", "내딛는다")
+OTHER_REGION_NEEDLES = ("다른", "지역")
+PAID_WASTELAND_NEEDLES = ("버림받은", "385", "아데나")
+OREN_TELEPORTER_NEEDLES = ("오렌", "텔레포터")
+FALLBACK_DIALOG_OCR_ATTEMPTS = 3
 
 GATE_DESTINATION_NEEDLE = "버림받은"
 GATE_SIBLING_NEEDLE = "심연"
@@ -282,12 +289,65 @@ def build_step_forward_text_locator(settings: dict, project_root: Path, reader: 
     return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*STEP_FORWARD_NEEDLES)), preprocess=mask_non_yellow, cache=False)
 
 
+def build_other_region_text_locator(settings: dict, project_root: Path,
+                                    reader: KoreanTextReader) -> RememberedDialogText:
+    """NPC teleporter menu entry: '다른 지역으로 가고 싶습니다.'."""
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        first_matching(needles_match_fn(*OTHER_REGION_NEEDLES)),
+        # This NPC menu is not guaranteed to use the same yellow shade as
+        # the gate dialogs. OCR the original crop so the colour mask cannot
+        # erase the target text.
+        preprocess=None,
+        cache=False,
+        merge_rows=True,
+    )
+
+
+def build_oren_teleporter_text_locator(
+    settings: dict, project_root: Path, reader: KoreanTextReader
+) -> RememberedDialogText:
+    """Talking-scroll destination entry: '[오렌] 텔레포터'."""
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        first_matching(needles_match_fn(*OREN_TELEPORTER_NEEDLES)),
+        cache=False,
+    )
+
+
+def build_paid_wasteland_text_locator(settings: dict, project_root: Path,
+                                      reader: KoreanTextReader) -> RememberedDialogText:
+    """Paid destination entry: '버림받은 자들의 땅: 385   아데나'.
+
+    needles_match_fn removes all whitespace before matching, and the needles
+    intentionally omit punctuation, so spacing around ':' and repeated spaces
+    before '아데나' do not affect recognition.
+    """
+    return RememberedDialogText(
+        _build_dialog_content_locator(settings, project_root),
+        reader,
+        first_matching(needles_match_fn(*PAID_WASTELAND_NEEDLES)),
+        preprocess=None,
+        cache=False,
+        merge_rows=True,
+    )
+
+
 def build_teleport_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["teleport_scroll"], project_root, panel=skill_panel)
 
 
 def locate_teleport_scroll(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
     return build_teleport_scroll_detector(settings, project_root, skill_panel).measure(frame)
+
+
+def locate_talking_scroll(settings: dict, project_root: Path, frame: np.ndarray,
+                          skill_panel: SkillPanelLocator) -> PresenceResult:
+    return build_icon_detector(
+        settings["icons"]["talking_scroll"], project_root, panel=skill_panel
+    ).measure(frame)
 
 
 def open_teleport_dialog(link: SerialLink, converter: FrameToMouseConverter, icon_region: Region) -> bool:
@@ -485,6 +545,165 @@ def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
     return True
 
 
+def _use_npc_teleporter_fallback(
+    settings: dict,
+    project_root: Path,
+    window_title: str,
+    link: SerialLink,
+    skill_panel: SkillPanelLocator,
+    screen_capture_cls,
+    oren_teleporter_text: RememberedDialogText,
+    other_region_text: RememberedDialogText,
+    paid_wasteland_text: RememberedDialogText,
+) -> bool:
+    """Fallback route used only when icon_teleport_scroll is absent."""
+    print("  [fallback] using talking_scroll + npc_teleporter route")
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    talking_scroll = locate_talking_scroll(
+        settings, project_root, frame, skill_panel
+    )
+    if not talking_scroll.present or talking_scroll.region is None:
+        print("[stop] fallback icon_talking_scroll not present.")
+        return False
+    if not double_click_region(link, converter, talking_scroll.region):
+        print("[stop] fallback talking_scroll double-click failed.")
+        return False
+
+    sleep_jittered(DIALOG_OPEN_SETTLE_S)
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    oren_teleporter = oren_teleporter_text.find(frame)
+    print(f"  [fallback] '[오렌] 텔레포터' region: {oren_teleporter}")
+    if oren_teleporter is None or not click_region_once(
+        link, converter, oren_teleporter
+    ):
+        print("[stop] '[오렌] 텔레포터' click failed.")
+        return False
+
+    print(
+        f"  [fallback] waiting {NPC_TELEPORTER_RENDER_SETTLE_S}s "
+        "for npc_teleporter to render..."
+    )
+    sleep_jittered(NPC_TELEPORTER_RENDER_SETTLE_S)
+    npc_cfg = settings["npcs"]["teleporter"]
+    npc_template = cv2.imread(str(project_root / npc_cfg["template"]))
+    if npc_template is None:
+        print("[stop] npc_teleporter template could not be loaded.")
+        return False
+    npc_match = None
+    converter = None
+    for attempt in range(1, NPC_TELEPORTER_MAX_ATTEMPTS + 1):
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        npc_match = locate_template(
+            frame, npc_template, npc_cfg.get("match_threshold", 0.85)
+        )
+        if npc_match is not None:
+            print(
+                f"  [fallback] npc_teleporter found on attempt "
+                f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
+                f"score={npc_match.score:.3f} region={npc_match.region}"
+            )
+            break
+        best = locate_template(frame, npc_template, -1.0)
+        print(
+            f"  [fallback] npc_teleporter attempt "
+            f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: not found "
+            f"(best={best.score:.3f} at {best.region})"
+        )
+        if attempt < NPC_TELEPORTER_MAX_ATTEMPTS:
+            sleep_jittered(NPC_TELEPORTER_RETRY_INTERVAL_S)
+    if npc_match is None or converter is None:
+        print("[stop] npc_teleporter not found after retries.")
+        return False
+    if not click_region_once(
+        link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER
+    ):
+        print("[stop] npc_teleporter click failed.")
+        return False
+
+    other_region = None
+    for attempt in range(1, FALLBACK_DIALOG_OCR_ATTEMPTS + 1):
+        sleep_jittered(DIALOG_OPEN_SETTLE_S)
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        other_region = other_region_text.find(frame)
+        print(
+            f"  [fallback] '다른 지역으로 가고 싶습니다.' OCR "
+            f"{attempt}/{FALLBACK_DIALOG_OCR_ATTEMPTS}: {other_region}"
+        )
+        if other_region is not None:
+            break
+    if other_region is None or not click_region_once(link, converter, other_region):
+        print("[stop] '다른 지역으로 가고 싶습니다.' click failed.")
+        return False
+
+    paid_wasteland = None
+    for attempt in range(1, FALLBACK_DIALOG_OCR_ATTEMPTS + 1):
+        sleep_jittered(DIALOG_OPEN_SETTLE_S)
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        paid_wasteland = paid_wasteland_text.find(frame)
+        print(
+            f"  [fallback] '버림받은 자들의 땅: 385   아데나' OCR "
+            f"{attempt}/{FALLBACK_DIALOG_OCR_ATTEMPTS}: {paid_wasteland}"
+        )
+        if paid_wasteland is not None:
+            break
+    if paid_wasteland is None or not click_region_once(
+        link, converter, paid_wasteland
+    ):
+        print("[stop] paid wasteland destination click failed.")
+        return False
+    return True
+
+
+def _verify_wasteland_arrival(
+    settings: dict,
+    project_root: Path,
+    window_title: str,
+    link: SerialLink,
+    screen_capture_cls,
+    hp_detector,
+    hp_exit_percent: float,
+    retry_text: Optional[RememberedDialogText] = None,
+) -> Optional[bool]:
+    """Verify arrival; optionally retry the old '발을 내딛는다' click."""
+    print("[6/6] verifying location changed to '버림받은 자들의 땅'...")
+    location_content_locator = build_location_content_locator(settings, project_root)
+    location_detector = build_wasteland_location_detector(settings, project_root)
+    location_cfg = settings["location"]
+    verify_timeout_s = float(location_cfg.get("verify_timeout_seconds", 6.0))
+    verify_interval_s = float(location_cfg.get("verify_interval_seconds", 0.5))
+    deadline = time.monotonic() + verify_timeout_s
+    attempt = 0
+    retried_click = False
+    while time.monotonic() < deadline:
+        sleep_jittered(verify_interval_s)
+        attempt += 1
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+            return None
+        location_result = measure_wasteland_location(
+            location_content_locator, location_detector, frame
+        )
+        print(
+            f"  location check {attempt}: present={location_result.present} "
+            f"score={location_result.match_score:.3f}"
+        )
+        if location_result.present:
+            print("  location confirmed -- [3단계] complete")
+            return True
+        if retry_text is not None and not retried_click:
+            retry_target = retry_text.find(frame)
+            if retry_target is not None:
+                print("  location not confirmed -- '발을 내딛는다' still there, retrying click...")
+                retry_ok = click_region_once(link, converter, retry_target)
+                print(f"    retry click -> {'ok' if retry_ok else 'FAILED (missing ACK)'}")
+                retried_click = True
+    print(
+        f"[stop] location never confirmed as '버림받은 자들의 땅' "
+        f"within {verify_timeout_s:.1f}s."
+    )
+    return False
+
+
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         wasteland_text: RememberedDialogText, gate_dest_text: RememberedDialogText, step_forward_text: RememberedDialogText,
         reader: KoreanTextReader, screen_capture_cls, hp_detector=None) -> Optional[bool]:
@@ -501,6 +720,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
     gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
+    other_region_text = build_other_region_text_locator(
+        settings, project_root, reader
+    )
+    paid_wasteland_text = build_paid_wasteland_text_locator(
+        settings, project_root, reader
+    )
+    oren_teleporter_text = build_oren_teleporter_text_locator(
+        settings, project_root, reader
+    )
 
     print("[1/6] teleport_scroll: pressing F2...")
     if not ensure_skill_tab(link):
@@ -516,29 +744,34 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     scroll = locate_teleport_scroll(settings, project_root, frame, skill_panel)
     print(f"  teleport_scroll: present={scroll.present} score={scroll.match_score:.3f} region={scroll.region}")
     if not scroll.present:
-        print("[stop] teleport_scroll not present.")
-        return False
-    ok = open_teleport_dialog(link, converter, scroll.region)
-    print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    if not ok:
-        return False
+        if not _use_npc_teleporter_fallback(
+            settings, project_root, window_title, link, skill_panel,
+            screen_capture_cls, oren_teleporter_text, other_region_text,
+            paid_wasteland_text,
+        ):
+            return False
+    else:
+        ok = open_teleport_dialog(link, converter, scroll.region)
+        print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+        if not ok:
+            return False
 
-    print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
-    sleep_jittered(DIALOG_OPEN_SETTLE_S)
+        print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
+        sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
-    print("[2/6] finding '* [오렌] 버땅' text...")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-        return None
-    target = wasteland_text.find(frame)
-    print(f"  target region: {target}")
-    if target is None:
-        print("[stop] '오렌'+'버땅' text not found -- is the dialog open?")
-        return False
-    ok = double_click_text_center(link, converter, target)
-    print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    if not ok:
-        return False
+        print("[2/6] finding '* [오렌] 버땅' text...")
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
+            return None
+        target = wasteland_text.find(frame)
+        print(f"  target region: {target}")
+        if target is None:
+            print("[stop] '오렌'+'버땅' text not found -- is the dialog open?")
+            return False
+        ok = double_click_text_center(link, converter, target)
+        print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+        if not ok:
+            return False
 
     print(f"Waiting {GATE_RENDER_SETTLE_S}s for the teleport gate to render...")
     sleep_jittered(GATE_RENDER_SETTLE_S)
@@ -676,40 +909,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     if not ok:
         return False
 
-    print("[6/6] verifying location changed to '버림받은 자들의 땅'...")
-    location_content_locator = build_location_content_locator(settings, project_root)
-    location_detector = build_wasteland_location_detector(settings, project_root)
-    location_cfg = settings["location"]
-    verify_timeout_s = float(location_cfg.get("verify_timeout_seconds", 6.0))
-    verify_interval_s = float(location_cfg.get("verify_interval_seconds", 0.5))
-    deadline = time.monotonic() + verify_timeout_s
-    attempt = 0
-    retried_click = False
-    while time.monotonic() < deadline:
-        sleep_jittered(verify_interval_s)
-        attempt += 1
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-            return None
-        location_result = measure_wasteland_location(location_content_locator, location_detector, frame)
-        print(f"  location check {attempt}: present={location_result.present} score={location_result.match_score:.3f}")
-        if location_result.present:
-            print("  location confirmed -- [3단계] complete")
-            return True
-        # If the confirmation dialog is still visible, the previous HID
-        # click did not take effect. Retry it once, then keep polling the
-        # actual location until the timeout instead of assuming a fixed
-        # transition time.
-        if not retried_click:
-            retry_target = step_forward_text.find(frame)
-            if retry_target is not None:
-                print("  location not confirmed -- '발을 내딛는다' still there, retrying click...")
-                retry_ok = click_region_once(link, converter, retry_target)
-                print(f"    retry click -> {'ok' if retry_ok else 'FAILED (missing ACK)'}")
-                retried_click = True
-
-    print(f"[stop] location never confirmed as '버림받은 자들의 땅' within {verify_timeout_s:.1f}s.")
-    return False
+    return _verify_wasteland_arrival(
+        settings, project_root, window_title, link, screen_capture_cls,
+        hp_detector, hp_exit_percent, retry_text=step_forward_text,
+    )
 
 
 def main() -> None:

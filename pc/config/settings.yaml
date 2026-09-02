@@ -196,6 +196,11 @@ icons:
 # specifically for that, not as a replacement for OCR-based text finding
 # (pc/detector/chat_reader.py) which is still used for menu text.
 npcs:
+  teleporter:
+    template: templates/npc_teleporter.png
+    # Live candidate stayed at the same true location across five frames
+    # while scoring 0.448-0.455, so 0.85 rejected a stable real match.
+    match_threshold: 0.40
   event:
     template: templates/npc_event.png
     match_threshold: 0.85
