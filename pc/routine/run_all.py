@@ -34,7 +34,6 @@ import random
 import threading
 import traceback
 from datetime import datetime, timedelta
-from functools import partial
 from pathlib import Path
 from typing import TextIO
 
@@ -52,11 +51,6 @@ from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.timing import sleep_jittered  # noqa: E402
-from pc.routine.death_recovery import (  # noqa: E402
-    DeathAwareScreenCapture,
-    DeathRecoveryController,
-    DeathRecoveryRequested,
-)
 from pc.routine.step_move_to_hotel import (  # noqa: E402
     _capture_and_convert,
     set_cursor_park_region,
@@ -180,6 +174,12 @@ def _run_once() -> float:
     from pc.serial.port_finder import resolve_port
 
     settings = load_settings()
+    step2_cfg = settings.setdefault("step2", {})
+    event_override = os.environ.get("ROUTINE_STEP2_EVENT_ENABLED")
+    if event_override is not None:
+        step2_cfg["event_recovery_enabled"] = (
+            event_override.strip().lower() in {"1", "true", "yes", "on"}
+        )
     window_title = settings["capture"]["window_title"]
     project_root = _PROJECT_ROOT
     restart_delay_s = float(
@@ -235,6 +235,10 @@ def _run_once() -> float:
         "[config] teleport on MP stagnation: "
         f"{'enabled' if routine_cfg.get('teleport_on_mp_stagnation', True) else 'disabled'}"
     )
+    print(
+        "[config] Step 2 missing-buff_event handling: "
+        f"{'enabled' if step2_cfg.get('event_recovery_enabled', True) else 'disabled'}"
+    )
 
     roi_skill_cfg = settings["roi_skill"]
     skill_panel = SkillPanelLocator(
@@ -267,12 +271,9 @@ def _run_once() -> float:
             sleep_jittered(0.3)
             link.poll_acks()
 
-            death_controller = DeathRecoveryController(
-                settings, project_root, window_title, link
-            )
-            routine_capture_cls = partial(
-                DeathAwareScreenCapture, ScreenCapture, death_controller
-            )
+            # Death dialogs are intentionally ignored. Screen capture must not
+            # detect dialog_restart or click icon_restart automatically.
+            routine_capture_cls = ScreenCapture
 
             print("[startup] clicking roi_chatting once before F2...")
             if not _click_startup_chat(
@@ -288,7 +289,8 @@ def _run_once() -> float:
 
             print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP 97% 이상 대기) ===")
             ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
-                                     hotel_text, rent_room_text, ok_button_text, routine_capture_cls)
+                                     hotel_text, rent_room_text, ok_button_text,
+                                     routine_capture_cls, korean_reader)
             if not ok:
                 print("[stop] 초기 진입 실패.")
                 return restart_delay_s
@@ -327,7 +329,8 @@ def _run_once() -> float:
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, routine_capture_cls, force_run=True,
+                        ok_button_text, routine_capture_cls, korean_reader,
+                        force_run=True,
                     )
                     if not ok:
                         print("[resume] Step 2 failed; returning to normal recovery")
@@ -346,7 +349,8 @@ def _run_once() -> float:
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, routine_capture_cls, force_run=True,
+                        ok_button_text, routine_capture_cls, korean_reader,
+                        force_run=True,
                     )
                     if not ok:
                         print(f"[stop] cycle {cycle}: emergency [2단계] failed.")
@@ -399,9 +403,6 @@ def main() -> None:
             restart_delay_s = DEFAULT_RESTART_DELAY_S
             try:
                 restart_delay_s = _run_once()
-            except DeathRecoveryRequested as error:
-                restart_delay_s = 1.0
-                print(f"[death] recovery requested: {error}; restarting from Step 2")
             except Exception as e:
                 print(f"[recovery] unexpected {type(e).__name__}: {e}")
                 traceback.print_exc()

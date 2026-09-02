@@ -124,6 +124,9 @@ buffs:
   meditation:
     template: templates/buff_meditation.png
     match_threshold: 0.85
+  event:
+    template: templates/buff_event.png
+    match_threshold: 0.85
   haste:
     template: templates/buff_haste.png
     match_threshold: 0.85  # placeholder, same default as the other buffs -- not yet live-calibrated
@@ -193,6 +196,9 @@ icons:
 # specifically for that, not as a replacement for OCR-based text finding
 # (pc/detector/chat_reader.py) which is still used for menu text.
 npcs:
+  event:
+    template: templates/npc_event.png
+    match_threshold: 0.85
   hotel_manager:
     template: templates/npc_hotel_manager.png
     # Measured 0.907-1.0 across several independent live frames (same
@@ -314,6 +320,10 @@ dialog:
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
   mp_ready_percent: 97.0
+  # When buff_event is absent before meditation, visit the Giran general
+  # merchant, click npc_event, then restart Step 2. The routine GUI can
+  # override this setting for the current run.
+  event_recovery_enabled: true
 
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
@@ -332,21 +342,14 @@ routine:
   # When enabled, a dungeon-time reading at or below this value pauses Step 3
   # until the randomized morning resume window. Disable it to keep running
   # Step 3 while still logging the reading and saving the low-time chat ROI.
-  pause_on_low_dungeon_time: true
+  pause_on_low_dungeon_time: false
   minimum_dungeon_minutes_for_step3: 9
   # After Step 3 succeeds, teleport once before enabling ATS in Step 4.
-  teleport_before_step4: true
+  teleport_before_step4: false
   pre_step4_teleport_settle_seconds: 1.5
   # During Step 4, teleport when MP has not decreased for this many ticks.
   teleport_on_mp_stagnation: true
   mp_stagnant_ticks_before_teleport: 5
-
-# Common death recovery for every frame captured during Steps 1-4.
-death_recovery:
-  dialog_template: templates/dialog_restart.png
-  dialog_match_threshold: 0.85
-  icon_template: templates/icon_restart.png
-  icon_match_threshold: 0.85
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have
@@ -359,3 +362,17 @@ death_recovery:
 serial:
   port: auto
   baud_rate: 115200
+
+# User-editable macro definitions. The current development step only provides
+# a GUI for editing/saving these values; no scheduler or HID execution path
+# reads this section yet.
+user_macros: []
+
+# A condition selects one of the macros above by its stable id. Runtime
+# execution is intentionally not implemented yet.
+macro_conditions:
+  hp_below:
+    enabled: false
+    threshold_percent: 70.0
+    cooldown_seconds: 3.0
+    macro_id: ""

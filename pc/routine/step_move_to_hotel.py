@@ -55,6 +55,11 @@ from pc.capture.screen_capture import Region  # noqa: E402
 from pc.detector.any_presence_detector import AnyPresenceDetector, build_icon_detector  # noqa: E402
 from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
+from pc.detector.window_content import ContentOffset, WindowContentLocator  # noqa: E402
+from pc.detector.chat_reader import KoreanTextReader, needles_match_fn  # noqa: E402
+from pc.detector.remembered_text import RememberedDialogText, first_matching  # noqa: E402
+from pc.detector.color_mask import mask_non_yellow  # noqa: E402
+from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.timing import sleep_jittered  # noqa: E402
@@ -74,6 +79,11 @@ TELEPORT_SETTLE_S = 1.5
 # once -- per the user, meditation can only be cast at MP >= 10.
 MEDITATION_RETRY_MIN_MP = 10
 MP_POLL_INTERVAL_S = 1.0
+EVENT_DIALOG_SETTLE_S = 0.6
+EVENT_TELEPORT_SETTLE_S = 1.5
+EVENT_NPC_SETTLE_S = 0.6
+MAX_EVENT_RESTARTS_PER_STEP2 = 3
+EVENT_MERCHANT_NEEDLES = ("기란", "잡화", "상인")
 
 # Registered once by run_all after roi_chatting is located. All shared click
 # helpers then park the cursor at a fresh random point in this region instead
@@ -106,6 +116,32 @@ def build_mana_buff_detector(settings: dict, project_root: Path, buff_panel: Ski
 
 def build_mana_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["mana"], project_root, panel=skill_panel)
+
+
+def build_event_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["buffs"]["event"], project_root, panel=buff_panel)
+
+
+def build_talking_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
+    return build_icon_detector(settings["icons"]["talking_scroll"], project_root, panel=skill_panel)
+
+
+def build_event_merchant_text_locator(settings: dict, project_root: Path,
+                                      reader: KoreanTextReader) -> RememberedDialogText:
+    dialog_cfg = settings["dialog"]
+    border = SkillPanelLocator(
+        project_root / dialog_cfg["template"],
+        dialog_cfg.get("match_threshold", 0.85),
+    )
+    content = WindowContentLocator(
+        border, ContentOffset(**dialog_cfg["content_offset"])
+    )
+    return RememberedDialogText(
+        content,
+        reader,
+        first_matching(needles_match_fn(*EVENT_MERCHANT_NEEDLES)),
+        preprocess=mask_non_yellow,
+    )
 
 
 def build_buff_panel(settings: dict, project_root: Path) -> SkillPanelLocator:
@@ -268,6 +304,101 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     return True
 
 
+def click_region_once(link: SerialLink, converter: FrameToMouseConverter,
+                      region: Region) -> bool:
+    """Single-click a random point in the centered 30% of a region."""
+    fx = region.left + random.uniform(region.width * 0.35, region.width * 0.65)
+    fy = region.top + random.uniform(region.height * 0.35, region.height * 0.65)
+    ux, uy = converter.convert(fx, fy)
+    move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
+    if move_ack is None or not move_ack.ok:
+        return False
+    sleep_jittered(0.15)
+    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
+    if click_ack is None or not click_ack.ok:
+        return False
+    sleep_jittered(0.1)
+    park_cursor(link, converter)
+    return True
+
+
+def _handle_event_if_present(
+    settings: dict,
+    project_root: Path,
+    window_title: str,
+    link: SerialLink,
+    skill_panel: SkillPanelLocator,
+    screen_capture_cls,
+    event_merchant_text: RememberedDialogText,
+) -> bool | None:
+    """Handle the event before meditation when buff_event is absent.
+
+    Returns None when the event buff is present, True after completing the
+    event path (the caller must restart Step 2), and False on a failed action.
+    """
+    if not settings.get("step2", {}).get("event_recovery_enabled", True):
+        return None
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+    buff_panel = build_buff_panel(settings, project_root)
+    event_buff = build_event_buff_detector(
+        settings, project_root, buff_panel
+    ).measure(frame)
+    if event_buff.present:
+        print(
+            f"  [event] buff_event already present "
+            f"(score={event_buff.match_score:.3f}) -- skipping event path"
+        )
+        return None
+
+    print(
+        f"  [event] buff_event not present "
+        f"(score={event_buff.match_score:.3f}) -- starting event path"
+    )
+    if not ensure_skill_tab(link):
+        print("  [event] F2 keypress not ACKed")
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    scroll = build_talking_scroll_detector(
+        settings, project_root, skill_panel
+    ).measure(frame)
+    if not scroll.present or scroll.region is None:
+        print("  [event] icon_talking_scroll not present")
+        return False
+    if not double_click_region(link, converter, scroll.region):
+        print("  [event] talking_scroll double-click failed")
+        return False
+
+    sleep_jittered(EVENT_DIALOG_SETTLE_S)
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    merchant = event_merchant_text.find(frame)
+    if merchant is None:
+        print("  [event] '[기란] 잡화 상인' text not found")
+        return False
+    if not click_region_once(link, converter, merchant):
+        print("  [event] '[기란] 잡화 상인' click failed")
+        return False
+
+    sleep_jittered(EVENT_TELEPORT_SETTLE_S)
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    npc_cfg = settings["npcs"]["event"]
+    npc_template = cv2.imread(str(project_root / npc_cfg["template"]))
+    if npc_template is None:
+        print("  [event] npc_event template could not be loaded")
+        return False
+    npc_match = locate_template(
+        frame, npc_template, npc_cfg.get("match_threshold", 0.85)
+    )
+    if npc_match is None:
+        print("  [event] npc_event not found")
+        return False
+    if not click_region_once(link, converter, npc_match.region):
+        print("  [event] npc_event click failed")
+        return False
+    print("  [event] npc_event clicked -- restarting [2단계]")
+    sleep_jittered(EVENT_NPC_SETTLE_S)
+    return True
+
+
 def ensure_mana(settings: dict, project_root: Path, link: SerialLink,
                 skill_panel: SkillPanelLocator, window_title: str,
                 screen_capture_cls) -> None:
@@ -305,26 +436,48 @@ def _capture_and_convert(window_title: str, screen_capture_cls):
 
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
-        skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls) -> bool:
+        skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls,
+        korean_reader: KoreanTextReader) -> bool:
     """Full step: hotel_key double-click (teleport to room), then
     meditation double-click (start recovering), then verify the
     meditation buff actually came up and retry once if not (see module
     docstring). Returns False as soon as any sub-action fails to find
     its icon or ACK."""
-    # -- sub-action 1: hotel_key --
-    if not ensure_skill_tab(link):
-        return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
-    if not hotel_key.present or hotel_key.region is None:
-        return False
-    if not double_click_region(link, converter, hotel_key.region):
-        return False
+    event_merchant_text = build_event_merchant_text_locator(
+        settings, project_root, korean_reader
+    )
+    event_restarts = 0
+    while True:
+        # -- sub-action 1: hotel_key --
+        if not ensure_skill_tab(link):
+            return False
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
+        if not hotel_key.present or hotel_key.region is None:
+            return False
+        if not double_click_region(link, converter, hotel_key.region):
+            return False
 
-    if not press_escape_keys(link):
-        return False
+        if not press_escape_keys(link):
+            return False
 
-    sleep_jittered(TELEPORT_SETTLE_S)
+        sleep_jittered(TELEPORT_SETTLE_S)
+
+        event_result = _handle_event_if_present(
+            settings, project_root, window_title, link, skill_panel,
+            screen_capture_cls, event_merchant_text,
+        )
+        if event_result is False:
+            return False
+        if event_result is None:
+            break
+        event_restarts += 1
+        if event_restarts >= MAX_EVENT_RESTARTS_PER_STEP2:
+            print(
+                f"  [event] restart limit ({MAX_EVENT_RESTARTS_PER_STEP2}) "
+                "reached -- stopping to avoid an infinite loop"
+            )
+            return False
 
     # -- sub-action 2: meditation --
     # Do not toggle/cancel meditation when it is already active. The
@@ -380,6 +533,7 @@ def main() -> None:
     print("Loading OCR model (HP/MP)...")
     gauge_reader = GaugeTextReader()
     _, mp_detector = build_hp_mp_detectors(settings, _PROJECT_ROOT, gauge_reader)
+    korean_reader = KoreanTextReader()
 
     serial_cfg = settings["serial"]
     try:
@@ -389,7 +543,10 @@ def main() -> None:
             sleep_jittered(0.3)
             link.poll_acks()
 
-            ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, mp_detector, ScreenCapture)
+            ok = run(
+                settings, _PROJECT_ROOT, window_title, link, skill_panel,
+                mp_detector, ScreenCapture, korean_reader,
+            )
             if not ok:
                 sys.exit(1)
     except WindowNotFoundError as e:

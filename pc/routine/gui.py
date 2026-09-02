@@ -20,11 +20,14 @@ from pathlib import Path
 from tkinter.scrolledtext import ScrolledText
 from typing import Optional
 
+from pc.ui.periodic_macro_window import open_macro_settings
+
 
 PROJECT_ROOT = Path(
     getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2])
 )
 VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+SETTINGS_PATH = PROJECT_ROOT / "pc" / "config" / "settings.yaml"
 
 
 def routine_python() -> str:
@@ -44,10 +47,11 @@ class RoutineController:
         self.root = root
         self.process: Optional[subprocess.Popen[str]] = None
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
-        self.pause_on_low_dungeon_time = tk.BooleanVar(value=True)
+        self.pause_on_low_dungeon_time = tk.BooleanVar(value=False)
         self.minimum_dungeon_minutes = tk.StringVar(value="9")
-        self.teleport_before_step4 = tk.BooleanVar(value=True)
+        self.teleport_before_step4 = tk.BooleanVar(value=False)
         self.teleport_on_mp_stagnation = tk.BooleanVar(value=True)
+        self.step2_event_enabled = tk.BooleanVar(value=True)
         self.desired_end_state = "중지"
 
         root.title("업무 도우미")
@@ -111,6 +115,21 @@ class RoutineController:
         )
         self.mp_stagnation_teleport_check.pack(anchor="w")
 
+        self.step2_event_check = tk.Checkbutton(
+            secondary_options,
+            text="2단계 이벤트 처리 (buff_event 없을 때)",
+            variable=self.step2_event_enabled,
+        )
+        self.step2_event_check.pack(anchor="w")
+
+        macro_settings = tk.Frame(root, padx=12)
+        macro_settings.pack(fill="x", pady=(6, 0))
+        tk.Button(
+            macro_settings,
+            text="매크로 설정...",
+            command=lambda: open_macro_settings(root, SETTINGS_PATH),
+        ).pack(fill="x")
+
         self.log = ScrolledText(
             root, wrap="word", state="disabled", font=("Consolas", 10),
             bg="#111827", fg="#e5e7eb", insertbackground="white",
@@ -153,6 +172,9 @@ class RoutineController:
         environment["ROUTINE_TELEPORT_ON_MP_STAGNATION"] = (
             "1" if self.teleport_on_mp_stagnation.get() else "0"
         )
+        environment["ROUTINE_STEP2_EVENT_ENABLED"] = (
+            "1" if self.step2_event_enabled.get() else "0"
+        )
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW
@@ -180,6 +202,7 @@ class RoutineController:
         self.minimum_dungeon_minutes_input.config(state="disabled")
         self.pre_step4_teleport_check.config(state="disabled")
         self.mp_stagnation_teleport_check.config(state="disabled")
+        self.step2_event_check.config(state="disabled")
         self.wait_button.config(state="normal")
         self.stop_button.config(state="normal")
         self._append("[GUI] 루틴을 시작합니다.\n")
@@ -234,6 +257,7 @@ class RoutineController:
         self.minimum_dungeon_minutes_input.config(state="normal")
         self.pre_step4_teleport_check.config(state="normal")
         self.mp_stagnation_teleport_check.config(state="normal")
+        self.step2_event_check.config(state="normal")
         self.wait_button.config(state="disabled")
         self.stop_button.config(state="disabled")
         self._append(f"[GUI] 프로세스 종료 코드: {return_code}, 상태: {state}\n")
