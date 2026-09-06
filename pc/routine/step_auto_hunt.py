@@ -467,6 +467,11 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     while True:
         # The hotel key is a persistent precondition for every [2단계]
         # entry, independent of current MP.
+        if not step1.ensure_visible_skill_tab(
+            link, skill_panel, window_title, screen_capture_cls
+        ):
+            print("  [2단계] skill panel unavailable -- cannot check hotel_key")
+            return False
         with screen_capture_cls(window_title=window_title) as cap:
             frame = cap.grab()
         hotel_key = build_icon_detector(

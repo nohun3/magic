@@ -275,16 +275,11 @@ def _run_once() -> float:
             # detect dialog_restart or click icon_restart automatically.
             routine_capture_cls = ScreenCapture
 
-            print("[startup] clicking roi_chatting once before F2...")
+            print("[startup] clicking roi_chatting once before entering the routine...")
             if not _click_startup_chat(
                 link, settings, project_root, window_title, routine_capture_cls
             ):
                 print("[startup] roi_chatting click failed -- restarting session")
-                return restart_delay_s
-
-            print("[startup] pressing F2 once before entering the routine...")
-            if not link.send_and_wait("KEY", "F2"):
-                print("[startup] F2 keypress not ACKed -- restarting session")
                 return restart_delay_s
 
             print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP 97% 이상 대기) ===")

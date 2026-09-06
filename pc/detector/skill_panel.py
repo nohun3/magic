@@ -32,6 +32,12 @@ class SkillPanelLocator:
         self._match_threshold = match_threshold
         self._search_region = search_region
         self._cached_region: Optional[Region] = None
+        self._last_match_score = 0.0
+
+    @property
+    def last_match_score(self) -> float:
+        """Best score from the most recent forced panel search."""
+        return self._last_match_score
 
     def relocate(self, frame: np.ndarray) -> Optional[Region]:
         """Force a fresh full-frame search and cache the result. Call
@@ -56,17 +62,21 @@ class SkillPanelLocator:
         th, tw = self._template.shape[:2]
         if search_frame.shape[0] < th or search_frame.shape[1] < tw:
             self._cached_region = None
+            self._last_match_score = 0.0
             return None
 
-        match = locate_template(search_frame, self._template, self._match_threshold)
-        if match is None:
+        # Search at zero first so callers can distinguish a near miss from a
+        # completely different/hidden UI when reporting recovery failures.
+        best = locate_template(search_frame, self._template, 0.0)
+        self._last_match_score = best.score if best is not None else 0.0
+        if best is None or best.score < self._match_threshold:
             self._cached_region = None
         else:
             self._cached_region = Region(
-                left=match.region.left + offset_left,
-                top=match.region.top + offset_top,
-                width=match.region.width,
-                height=match.region.height,
+                left=best.region.left + offset_left,
+                top=best.region.top + offset_top,
+                width=best.region.width,
+                height=best.region.height,
             )
         return self._cached_region
 

@@ -68,6 +68,7 @@ TELEPORT_SETTLE_S = 1.5
 # How long to wait after clicking the NPC / a menu entry before the next
 # dialog/prompt has finished rendering.
 DIALOG_STEP_SETTLE_S = 0.6
+SKILL_TAB_VERIFY_ATTEMPTS = 2
 
 RENT_ROOM_NEEDLES = ("방을", "대여한다")
 OK_NEEDLES = ("OK",)
@@ -168,6 +169,35 @@ def locate_hotel_manager(settings: dict, project_root: Path, frame: np.ndarray):
     return locate_template(frame, template, npc_cfg.get("match_threshold", 0.85))
 
 
+def ensure_visible_skill_tab(link: SerialLink, skill_panel: SkillPanelLocator,
+                             window_title: str, screen_capture_cls) -> bool:
+    """Select F2 and verify that the quick-slot panel is visible.
+
+    A serial ACK only proves that Arduino sent the key. It does not prove the
+    game accepted it or that the expected tab appeared. The panel itself is
+    visible on other quick-slot pages too, so it must never be treated as proof
+    that F2 is already selected; always send F2 before checking the panel.
+    """
+    for attempt in range(1, SKILL_TAB_VERIFY_ATTEMPTS + 1):
+        if not ensure_skill_tab(link):
+            print(f"  [skill tab] F2 attempt {attempt}: missing ACK")
+            continue
+        frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+        region = skill_panel.relocate(frame)
+        score = skill_panel.last_match_score
+        if region is not None:
+            print(
+                f"  [skill tab] verified on attempt {attempt}: "
+                f"score={score:.3f} region={region}"
+            )
+            return True
+        print(
+            f"  [skill tab] not visible after F2 attempt {attempt}: "
+            f"best_score={score:.3f}"
+        )
+    return False
+
+
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         hotel_text: RememberedDialogText, rent_room_text: RememberedDialogText, ok_button_text: RememberedDialogText,
         screen_capture_cls) -> bool:
@@ -177,17 +207,34 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     OCR caches persist across repeated calls in a long-running loop
     instead of resetting every process invocation. Returns False as
     soon as any sub-action fails to find its target or ACK."""
-    print("[1/5] talking_scroll: pressing F2...")
-    if not ensure_skill_tab(link):
-        print("[stop] F2 keypress not ACKed")
+    print("[1/5] talking_scroll: opening and verifying F2 tab...")
+    if not ensure_visible_skill_tab(
+        link, skill_panel, window_title, screen_capture_cls
+    ):
+        print("[stop] F2 tab could not be verified")
         return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    print("  parking cursor (clear any leftover tooltip from a previous step)...")
-    park_cursor(link, converter)
-    sleep_jittered(0.2)
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    scroll = locate_talking_scroll(settings, project_root, frame, skill_panel)
-    print(f"  talking_scroll: present={scroll.present} score={scroll.match_score:.3f} region={scroll.region}")
+    scroll = None
+    converter = None
+    for detection_attempt in range(1, 3):
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        print("  parking cursor (clear any leftover tooltip from a previous step)...")
+        park_cursor(link, converter)
+        sleep_jittered(0.2)
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        scroll = locate_talking_scroll(settings, project_root, frame, skill_panel)
+        print(
+            f"  talking_scroll attempt {detection_attempt}: "
+            f"present={scroll.present} score={scroll.match_score:.3f} "
+            f"region={scroll.region}"
+        )
+        if scroll.present:
+            break
+        if detection_attempt == 1:
+            print("  talking_scroll missing -- reselecting F2 and retrying...")
+            if not ensure_visible_skill_tab(
+                link, skill_panel, window_title, screen_capture_cls
+            ):
+                break
     if not scroll.present:
         print("[stop] talking_scroll not present.")
         return False

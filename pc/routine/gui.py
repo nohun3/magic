@@ -49,9 +49,9 @@ class RoutineController:
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.pause_on_low_dungeon_time = tk.BooleanVar(value=False)
         self.minimum_dungeon_minutes = tk.StringVar(value="9")
-        self.teleport_before_step4 = tk.BooleanVar(value=False)
+        self.teleport_before_step4 = tk.BooleanVar(value=True)
         self.teleport_on_mp_stagnation = tk.BooleanVar(value=True)
-        self.step2_event_enabled = tk.BooleanVar(value=True)
+        self.step2_event_enabled = tk.BooleanVar(value=False)
         self.desired_end_state = "중지"
 
         root.title("업무 도우미")

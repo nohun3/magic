@@ -98,7 +98,11 @@ chat:
 # aren't affected by this either.)
 roi_skill:
   template: templates/roi_skill.png
-  match_threshold: 0.4
+  # The panel contents vary with the selected quick-slot page and active
+  # icon state. A live F2 panel currently scores about 0.324 against this
+  # whole-panel template; icon detection inside it still uses its own strict
+  # 0.85 thresholds.
+  match_threshold: 0.30
   # The quick-slot panel is fixed at the bottom-right. Restricting the
   # search prevents low-threshold whole-panel matching from accepting a
   # similarly textured patch in the game world.
@@ -331,7 +335,7 @@ step2:
   # When buff_event is absent before meditation, visit the Giran general
   # merchant, click npc_event, then restart Step 2. The routine GUI can
   # override this setting for the current run.
-  event_recovery_enabled: true
+  event_recovery_enabled: false
 
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
@@ -353,7 +357,7 @@ routine:
   pause_on_low_dungeon_time: false
   minimum_dungeon_minutes_for_step3: 9
   # After Step 3 succeeds, teleport once before enabling ATS in Step 4.
-  teleport_before_step4: false
+  teleport_before_step4: true
   pre_step4_teleport_settle_seconds: 1.5
   # During Step 4, teleport when MP has not decreased for this many ticks.
   teleport_on_mp_stagnation: true
