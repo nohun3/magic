@@ -1,6 +1,6 @@
 """[3단계] 버려진땅 이동.
 
-1. roi_skill에서 icon_teleport_scroll 더블클릭 -> 텔레포트 목록 대화창(dialog) 오픈
+1. F10 단축키 입력 -> 텔레포트 목록 대화창(dialog) 오픈
 2. dialog 영역에서 "* [오렌] 버땅" 텍스트를 더블클릭
 3. npc_teleport_gate 이미지와 가장 비슷한 부분(월드 공간, 화면 전체 검색)을 원클릭
 4. 3번이 여는 새 dialog(같은 generic dialog 프레임, 다른 내용)에서 "버림받은 자들의
@@ -13,8 +13,7 @@
    추가함 -- 확인 안 되면 "발을 내딛는다"를 다시 찾아 재클릭한다
    (`location.verify_timeout_seconds` 동안 재확인).
 
-icon_teleport_scroll도 hotel_key/meditation과 같은 F2 quick-slot 탭에 있으므로
-step_move_to_hotel의 ensure_skill_tab()/double_click_region()을 그대로 재사용한다.
+텔레포트 목록은 icon_teleport_scroll 이미지 탐색 대신 F10 단축키로 연다.
 
 sub-action 3은 아이콘이 아니라 게임 월드에 렌더링되는 오브젝트라서 roi_skill 같은
 패널에 스코프하지 않고 프레임 전체를 대상으로 template matching한다 (npc_hotel_manager
@@ -61,7 +60,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pc.capture.screen_capture import Region  # noqa: E402
-from pc.detector.any_presence_detector import AnyPresenceDetector, build_icon_detector  # noqa: E402
 from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.window_content import ContentOffset, WindowContentLocator  # noqa: E402
@@ -71,10 +69,10 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import MatchResult, locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
+from pc.routine.step_move_to_hotel import double_click_region, park_cursor, _capture_and_convert  # noqa: E402
 from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
-# How long to wait after double-clicking teleport_scroll before the
+# How long to wait after pressing the teleport-scroll F10 shortcut before the
 # dialog has finished opening/rendering.
 DIALOG_OPEN_SETTLE_S = 0.6
 
@@ -335,18 +333,6 @@ def build_paid_wasteland_text_locator(settings: dict, project_root: Path,
     )
 
 
-def build_teleport_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["teleport_scroll"], project_root, panel=skill_panel)
-
-
-def locate_teleport_scroll(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
-    return build_teleport_scroll_detector(settings, project_root, skill_panel).measure(frame)
-
-
-def open_teleport_dialog(link: SerialLink, converter: FrameToMouseConverter, icon_region: Region) -> bool:
-    return double_click_region(link, converter, icon_region)
-
-
 def _partial_gate_match(frame: np.ndarray, template: np.ndarray, threshold: float,
                         min_visible_fraction: float, scan_step_px: int) -> Optional[MatchResult]:
     """Match the visible part of a gate clipped by a frame edge.
@@ -549,7 +535,7 @@ def _use_npc_teleporter_fallback(
     other_region_text: RememberedDialogText,
     paid_wasteland_text: RememberedDialogText,
 ) -> bool:
-    """Fallback route used only when icon_teleport_scroll is absent."""
+    """Fallback route used when the F10 teleport dialog is unavailable."""
     print("  [fallback] using talking_scroll F11 + npc_teleporter route")
     shortcut_ok, hold_ms = send_random_key_tap(link, "F11")
     print(
@@ -720,20 +706,24 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         settings, project_root, reader
     )
 
-    print("[1/6] teleport_scroll: pressing F2...")
-    if not ensure_skill_tab(link):
-        print("[stop] F2 keypress not ACKed")
+    print("[1/6] teleport_scroll: pressing F10 shortcut...")
+    shortcut_ok, hold_ms = send_random_key_tap(link, "F10")
+    print(
+        f"  F10 ({hold_ms}ms) -> "
+        f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
+    )
+    if not shortcut_ok:
         return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    print("  parking cursor (clear any leftover tooltip from a previous step)...")
-    park_cursor(link, converter)
-    sleep_jittered(0.2)
+    print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
+    sleep_jittered(DIALOG_OPEN_SETTLE_S)
+
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
         return None
-    scroll = locate_teleport_scroll(settings, project_root, frame, skill_panel)
-    print(f"  teleport_scroll: present={scroll.present} score={scroll.match_score:.3f} region={scroll.region}")
-    if not scroll.present:
+    target = wasteland_text.find(frame)
+    print(f"[2/6] '* [오렌] 버땅' region: {target}")
+    if target is None:
+        print("  F10 dialog target not found -- using NPC teleporter fallback")
         if not _use_npc_teleporter_fallback(
             settings, project_root, window_title, link, skill_panel,
             screen_capture_cls, oren_teleporter_text, other_region_text,
@@ -741,23 +731,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         ):
             return False
     else:
-        ok = open_teleport_dialog(link, converter, scroll.region)
-        print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-        if not ok:
-            return False
-
-        print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
-        sleep_jittered(DIALOG_OPEN_SETTLE_S)
-
-        print("[2/6] finding '* [오렌] 버땅' text...")
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-            return None
-        target = wasteland_text.find(frame)
-        print(f"  target region: {target}")
-        if target is None:
-            print("[stop] '오렌'+'버땅' text not found -- is the dialog open?")
-            return False
         ok = double_click_text_center(link, converter, target)
         print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
         if not ok:
