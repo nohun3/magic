@@ -8,8 +8,7 @@ roi_skill에 없으면(아직 방을 안 구했으면) 먼저 이 스텝을 실�
 5개의 서브액션, 전부 오늘 세션에서 개별적으로 검증된 패턴을 그대로 이어붙인
 것:
 
-1. roi_skill에서 icon_talking_scroll 더블클릭 -> 대화창 오픈 (F2 탭,
-   step_move_to_hotel의 ensure_skill_tab()/double_click_region() 재사용)
+1. F11 단축키 입력 -> 말하는 두루마리 대화창 오픈
 2. dialog 영역에서 "[오렌] 여관" 텍스트를 원클릭 -> 오렌 마을 여관으로 텔레포트
 3. npc_hotel_manager 이미지와 가장 비슷한 부분(월드 공간, 화면 전체 검색)을
    원클릭 -> "엔케" NPC와 대화 시작 (step_move_to_wasteland의
@@ -44,8 +43,6 @@ import numpy as np
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from pc.detector.any_presence_detector import AnyPresenceDetector, build_icon_detector  # noqa: E402
-from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.window_content import ContentOffset, WindowContentLocator  # noqa: E402
 from pc.detector.chat_reader import KoreanTextReader, needles_match_fn  # noqa: E402
@@ -53,12 +50,12 @@ from pc.detector.remembered_text import RememberedDialogText, first_matching  # 
 from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
+from pc.routine.step_move_to_hotel import ensure_skill_tab, _capture_and_convert  # noqa: E402
 from pc.routine.step_move_to_wasteland import click_region_once, SPRITE_CLICK_JITTER  # noqa: E402
-from pc.routine.timing import sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
-# How long to wait after double-clicking talking_scroll before the
-# dialog has finished opening/rendering.
+# How long to wait after pressing the talking-scroll F11 shortcut before
+# the dialog has finished opening/rendering.
 DIALOG_OPEN_SETTLE_S = 0.6
 
 # How long to wait after teleporting to the inn before it's safe to
@@ -151,14 +148,6 @@ def build_ok_button_text_locator(settings: dict, project_root: Path, reader: Kor
     )
 
 
-def build_talking_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["talking_scroll"], project_root, panel=skill_panel)
-
-
-def locate_talking_scroll(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
-    return build_talking_scroll_detector(settings, project_root, skill_panel).measure(frame)
-
-
 def locate_hotel_manager(settings: dict, project_root: Path, frame: np.ndarray):
     """Plain unscoped template match for npc_hotel_manager.png -- a
     world-space NPC sprite, not a UI icon, so no panel to scope the
@@ -207,39 +196,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     OCR caches persist across repeated calls in a long-running loop
     instead of resetting every process invocation. Returns False as
     soon as any sub-action fails to find its target or ACK."""
-    print("[1/5] talking_scroll: opening and verifying F2 tab...")
-    if not ensure_visible_skill_tab(
-        link, skill_panel, window_title, screen_capture_cls
-    ):
-        print("[stop] F2 tab could not be verified")
-        return False
-    scroll = None
-    converter = None
-    for detection_attempt in range(1, 3):
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        print("  parking cursor (clear any leftover tooltip from a previous step)...")
-        park_cursor(link, converter)
-        sleep_jittered(0.2)
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        scroll = locate_talking_scroll(settings, project_root, frame, skill_panel)
-        print(
-            f"  talking_scroll attempt {detection_attempt}: "
-            f"present={scroll.present} score={scroll.match_score:.3f} "
-            f"region={scroll.region}"
-        )
-        if scroll.present:
-            break
-        if detection_attempt == 1:
-            print("  talking_scroll missing -- reselecting F2 and retrying...")
-            if not ensure_visible_skill_tab(
-                link, skill_panel, window_title, screen_capture_cls
-            ):
-                break
-    if not scroll.present:
-        print("[stop] talking_scroll not present.")
-        return False
-    ok = double_click_region(link, converter, scroll.region)
-    print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+    print("[1/5] talking_scroll: pressing F11 shortcut...")
+    ok, hold_ms = send_random_key_tap(link, "F11")
+    print(f"  F11 ({hold_ms}ms) -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
         return False
 

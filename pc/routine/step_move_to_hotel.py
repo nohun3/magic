@@ -62,7 +62,7 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.timing import sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
 # How long to wait after pressing F2 before the tab swap has visibly
 # finished (icons re-render) -- generous but this step only runs
@@ -127,10 +127,6 @@ def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: Sk
 
 def build_event_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["buffs"]["event"], project_root, panel=buff_panel)
-
-
-def build_talking_scroll_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["talking_scroll"], project_root, panel=skill_panel)
 
 
 def _select_event_merchant(lines) -> Region | None:
@@ -482,18 +478,12 @@ def _handle_event_if_present(
         f"  [event] buff_event not present "
         f"(score={event_buff.match_score:.3f}) -- starting event path"
     )
-    if not ensure_skill_tab(link):
-        print("  [event] F2 keypress not ACKed")
-        return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    scroll = build_talking_scroll_detector(
-        settings, project_root, skill_panel
-    ).measure(frame)
-    if not scroll.present or scroll.region is None:
-        print("  [event] icon_talking_scroll not present")
-        return False
-    if not double_click_region(link, converter, scroll.region):
-        print("  [event] talking_scroll double-click failed")
+    shortcut_ok, hold_ms = send_random_key_tap(link, "F11")
+    print(
+        f"  [event] talking_scroll F11 ({hold_ms}ms) -> "
+        f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
+    )
+    if not shortcut_ok:
         return False
 
     sleep_jittered(EVENT_DIALOG_SETTLE_S)

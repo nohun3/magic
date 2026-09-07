@@ -72,7 +72,7 @@ from pc.detector.template_locator import MatchResult, locate_template  # noqa: E
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
-from pc.routine.timing import sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
 # How long to wait after double-clicking teleport_scroll before the
 # dialog has finished opening/rendering.
@@ -343,13 +343,6 @@ def locate_teleport_scroll(settings: dict, project_root: Path, frame: np.ndarray
     return build_teleport_scroll_detector(settings, project_root, skill_panel).measure(frame)
 
 
-def locate_talking_scroll(settings: dict, project_root: Path, frame: np.ndarray,
-                          skill_panel: SkillPanelLocator) -> PresenceResult:
-    return build_icon_detector(
-        settings["icons"]["talking_scroll"], project_root, panel=skill_panel
-    ).measure(frame)
-
-
 def open_teleport_dialog(link: SerialLink, converter: FrameToMouseConverter, icon_region: Region) -> bool:
     return double_click_region(link, converter, icon_region)
 
@@ -557,16 +550,13 @@ def _use_npc_teleporter_fallback(
     paid_wasteland_text: RememberedDialogText,
 ) -> bool:
     """Fallback route used only when icon_teleport_scroll is absent."""
-    print("  [fallback] using talking_scroll + npc_teleporter route")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    talking_scroll = locate_talking_scroll(
-        settings, project_root, frame, skill_panel
+    print("  [fallback] using talking_scroll F11 + npc_teleporter route")
+    shortcut_ok, hold_ms = send_random_key_tap(link, "F11")
+    print(
+        f"  [fallback] F11 ({hold_ms}ms) -> "
+        f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
     )
-    if not talking_scroll.present or talking_scroll.region is None:
-        print("[stop] fallback icon_talking_scroll not present.")
-        return False
-    if not double_click_region(link, converter, talking_scroll.region):
-        print("[stop] fallback talking_scroll double-click failed.")
+    if not shortcut_ok:
         return False
 
     sleep_jittered(DIALOG_OPEN_SETTLE_S)
