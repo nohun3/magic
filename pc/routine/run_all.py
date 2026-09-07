@@ -63,7 +63,6 @@ import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 DEFAULT_RESTART_DELAY_S = 5.0
 DEFAULT_MIN_DUNGEON_MINUTES_FOR_STEP3 = 9
-DEFAULT_PRE_STEP4_TELEPORT_SETTLE_S = 1.5
 RESUME_WINDOW_START_HOUR = 7
 RESUME_WINDOW_START_MINUTE = 30
 RESUME_WINDOW_END_HOUR = 8
@@ -216,12 +215,7 @@ def _run_once() -> float:
                 "1", "true", "yes", "on",
             }
         )
-    pre_step4_teleport_settle_s = float(
-        routine_cfg.get(
-            "pre_step4_teleport_settle_seconds",
-            DEFAULT_PRE_STEP4_TELEPORT_SETTLE_S,
-        )
-    )
+    routine_cfg["teleport_before_step4"] = teleport_before_step4
     print(
         "[config] low dungeon-time pause: "
         f"{'enabled' if pause_on_low_dungeon_time else 'disabled'} "
@@ -366,20 +360,6 @@ def _run_once() -> float:
                 if not step3_result:
                     print(f"[stop] 사이클 {cycle}: [3단계] 실패.")
                     return restart_delay_s
-
-                if teleport_before_step4:
-                    print("[pre-step4] teleporting before ATS starts...")
-                    if not step4.click_teleport_icon(
-                        link, settings, project_root, skill_panel,
-                        window_title, routine_capture_cls,
-                    ):
-                        print("[pre-step4] teleport failed -- restarting from Step 2")
-                        return restart_delay_s
-                    print(
-                        f"[pre-step4] waiting {pre_step4_teleport_settle_s:.1f}s "
-                        "for the teleport transition..."
-                    )
-                    sleep_jittered(max(0.0, pre_step4_teleport_settle_s))
 
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
                 ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,

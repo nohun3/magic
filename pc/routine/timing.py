@@ -21,3 +21,11 @@ def send_random_key_tap(link, key: str) -> tuple[bool, int]:
     hold_ms = random.randint(SHORT_KEY_HOLD_MIN_MS, SHORT_KEY_HOLD_MAX_MS)
     ack = link.send_and_wait("KEY", f"{key} {hold_ms}")
     return ack is not None and ack.ok, hold_ms
+
+
+def sleep_transition_randomized(min_seconds: float = 0.5,
+                                max_seconds: float = 1.0) -> float:
+    """Sleep for a uniformly random transition delay and return it."""
+    delay = random.uniform(min_seconds, max_seconds)
+    sleep_jittered(delay, jitter_seconds=0.0)
+    return delay

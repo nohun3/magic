@@ -70,7 +70,7 @@ from pc.detector.template_locator import MatchResult, locate_template  # noqa: E
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import click_chat_region, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing the teleport-scroll F10 shortcut before the
 # dialog has finished opening/rendering.
@@ -79,7 +79,6 @@ DIALOG_OPEN_SETTLE_S = 0.6
 # How long to wait after clicking the destination text before the
 # teleport gate has finished rendering in the world.
 GATE_RENDER_SETTLE_S = 0.8
-NPC_TELEPORTER_RENDER_SETTLE_S = 1.5
 NPC_TELEPORTER_MAX_ATTEMPTS = 5
 NPC_TELEPORTER_RETRY_INTERVAL_S = 0.6
 WASTELAND_NEEDLES = ("오렌", "버땅")
@@ -445,6 +444,8 @@ GATE_RETRY_INTERVAL_S = 0.5
 TEXT_CLICK_JITTER = 0.15
 SPRITE_CLICK_JITTER = 0.15
 HP_RECOVERY_AFTER_F12 = "hp_recovery_after_f12"
+HP_RECOVERY_F7_SETTLE_MIN_S = 0.5
+HP_RECOVERY_F7_SETTLE_MAX_S = 1.0
 
 
 def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: float,
@@ -458,13 +459,30 @@ def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: flo
     hp = result.reading
     print(f"  [3단계 HP] {hp.current}/{hp.maximum} ({hp.percent:.1f}%)")
     if hp.percent <= threshold_percent:
-        ok, hold_ms = send_random_key_tap(link, "F12")
+        teleport_ok, teleport_hold_ms = send_random_key_tap(link, "F7")
         print(
             f"  [3단계 HP] <= {threshold_percent:.0f}% -- "
-            f"F12 ({hold_ms}ms) -> {'ok' if ok else 'FAILED (missing ACK)'}; "
+            f"F7 ({teleport_hold_ms}ms) -> "
+            f"{'ok' if teleport_ok else 'FAILED (missing ACK)'}"
+        )
+        if teleport_ok:
+            settle_s = random.uniform(
+                HP_RECOVERY_F7_SETTLE_MIN_S,
+                HP_RECOVERY_F7_SETTLE_MAX_S,
+            )
+            print(
+                f"  [3단계 HP] waiting {settle_s:.2f}s "
+                "after F7 before hotel return"
+            )
+            sleep_jittered(settle_s, jitter_seconds=0.0)
+
+        hotel_ok, hotel_hold_ms = send_random_key_tap(link, "F12")
+        print(
+            f"  [3단계 HP] F12 ({hotel_hold_ms}ms) -> "
+            f"{'ok' if hotel_ok else 'FAILED (missing ACK)'}; "
             "handoff to [2단계]"
         )
-        return ok
+        return hotel_ok
     return None
 
 
@@ -562,11 +580,11 @@ def _use_npc_teleporter_fallback(
         print("[stop] '[오렌] 텔레포터' click failed.")
         return False
 
+    npc_wait_s = sleep_transition_randomized()
     print(
-        f"  [fallback] waiting {NPC_TELEPORTER_RENDER_SETTLE_S}s "
-        "for npc_teleporter to render..."
+        f"  [fallback] waited {npc_wait_s:.2f}s "
+        "for npc_teleporter to render"
     )
-    sleep_jittered(NPC_TELEPORTER_RENDER_SETTLE_S)
     npc_cfg = settings["npcs"]["teleporter"]
     npc_template = cv2.imread(str(project_root / npc_cfg["template"]))
     if npc_template is None:

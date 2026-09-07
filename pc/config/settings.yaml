@@ -356,9 +356,10 @@ routine:
   # Step 3 while still logging the reading and saving the low-time chat ROI.
   pause_on_low_dungeon_time: false
   minimum_dungeon_minutes_for_step3: 9
-  # After Step 3 succeeds, teleport once before enabling ATS in Step 4.
+  # After ATS is enabled in Step 4, teleport once before monitoring starts.
   teleport_before_step4: true
-  pre_step4_teleport_settle_seconds: 1.5
+  pre_step4_teleport_settle_min_seconds: 0.5
+  pre_step4_teleport_settle_max_seconds: 1.0
   # During Step 4, teleport when MP has not decreased for this many ticks.
   teleport_on_mp_stagnation: true
   mp_stagnant_ticks_before_teleport: 5

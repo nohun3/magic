@@ -52,7 +52,7 @@ from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, _capture_and_convert  # noqa: E402
 from pc.routine.step_move_to_wasteland import click_region_once, SPRITE_CLICK_JITTER  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing the talking-scroll F11 shortcut before
 # the dialog has finished opening/rendering.
@@ -60,7 +60,6 @@ DIALOG_OPEN_SETTLE_S = 0.6
 
 # How long to wait after teleporting to the inn before it's safe to
 # recapture and look for the hotel_manager NPC sprite.
-TELEPORT_SETTLE_S = 1.5
 
 # How long to wait after clicking the NPC / a menu entry before the next
 # dialog/prompt has finished rendering.
@@ -221,8 +220,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     if not ok:
         return False
 
-    print(f"Waiting {TELEPORT_SETTLE_S}s for teleport...")
-    sleep_jittered(TELEPORT_SETTLE_S)
+    teleport_wait_s = sleep_transition_randomized()
+    print(f"Waited {teleport_wait_s:.2f}s for teleport.")
 
     print("[3/5] finding npc_hotel_manager...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)

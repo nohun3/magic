@@ -56,7 +56,7 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing F2 before the tab swap has visibly
 # finished (icons re-render) -- generous but this step only runs
@@ -66,7 +66,6 @@ TAB_SWITCH_SETTLE_S = 0.3
 # How long to wait after the hotel-key F12 shortcut before the teleport
 # fade/load has finished and it's safe to recapture -- longer than a
 # dialog opening (that's near-instant); a full scene teleport isn't.
-TELEPORT_SETTLE_S = 1.5
 
 # If the meditation buff didn't come up after the double-click, this is
 # the raw MP value (not percent) to wait for before retrying the cast
@@ -74,7 +73,6 @@ TELEPORT_SETTLE_S = 1.5
 MEDITATION_RETRY_MIN_MP = 10
 MP_POLL_INTERVAL_S = 1.0
 EVENT_DIALOG_SETTLE_S = 0.6
-EVENT_TELEPORT_SETTLE_S = 1.5
 EVENT_NPC_SETTLE_S = 0.6
 MAX_EVENT_RESTARTS_PER_STEP2 = 3
 HASTE_KEY_HOLD_MIN_S = 6.0
@@ -101,14 +99,6 @@ def build_hotel_key_detector(settings: dict, project_root: Path, skill_panel: Sk
 
 def build_meditation_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["buffs"]["meditation"], project_root, panel=buff_panel)
-
-
-def build_mana_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["buffs"]["mana"], project_root, panel=buff_panel)
-
-
-def build_mana_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["mana"], project_root, panel=skill_panel)
 
 
 def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -504,7 +494,8 @@ def _handle_event_if_present(
         print("  [event] '[기란] 잡화 상인' click failed")
         return False
 
-    sleep_jittered(EVENT_TELEPORT_SETTLE_S)
+    event_wait_s = sleep_transition_randomized()
+    print(f"  [event] waited {event_wait_s:.2f}s for teleport")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     npc_cfg = settings["npcs"]["event"]
     npc_template = cv2.imread(str(project_root / npc_cfg["template"]))
@@ -523,34 +514,6 @@ def _handle_event_if_present(
     print("  [event] npc_event clicked -- restarting [2단계]")
     sleep_jittered(EVENT_NPC_SETTLE_S)
     return True
-
-
-def ensure_mana(settings: dict, project_root: Path, link: SerialLink,
-                skill_panel: SkillPanelLocator, window_title: str,
-                screen_capture_cls) -> None:
-    """Activate mana buff when absent; absence/failure is non-fatal."""
-    buff_panel = build_buff_panel(settings, project_root)
-    frame = _capture_for_buff_check(
-        settings, project_root, window_title, link, screen_capture_cls
-    )
-    mana_buff = build_mana_buff_detector(settings, project_root, buff_panel).measure(frame)
-    if mana_buff.present:
-        print("  mana buff active -- ok")
-        return
-
-    print(f"  mana buff not active (score={mana_buff.match_score:.3f}) -- looking for icon_mana")
-    if not ensure_skill_tab(link):
-        print("  [mana warn] F2 keypress not ACKed -- continuing to [3단계]")
-        return
-
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    mana_icon = build_mana_icon_detector(settings, project_root, skill_panel).measure(frame)
-    if not mana_icon.present or mana_icon.region is None:
-        print(f"  [mana warn] icon_mana not present (score={mana_icon.match_score:.3f}) -- continuing to [3단계]")
-        return
-
-    ok = double_click_region(link, converter, mana_icon.region)
-    print(f"  [mana] double-click -> {'ok' if ok else 'FAILED (continuing to [3단계])'}")
 
 
 def ensure_haste_before_step3(
@@ -640,7 +603,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         if skip_hotel_teleport:
             print("  hotel F12 already sent by [3단계] HP recovery -- skipping duplicate")
             skip_hotel_teleport = False
-            sleep_jittered(TELEPORT_SETTLE_S)
+            wait_s = sleep_transition_randomized()
+            print(f"  waited {wait_s:.2f}s for hotel teleport")
         else:
             if not ensure_skill_tab(link):
                 return False
@@ -658,7 +622,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 return False
             if not press_escape_keys(link):
                 return False
-            sleep_jittered(TELEPORT_SETTLE_S)
+            wait_s = sleep_transition_randomized()
+            print(f"  waited {wait_s:.2f}s for hotel teleport")
 
         event_result = _handle_event_if_present(
             settings, project_root, window_title, link, skill_panel,
@@ -699,13 +664,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             window_title, screen_capture_cls,
         ):
             print("  [warn] meditation buff could not be confirmed -- continuing without meditation")
-
-    # Mana belongs to the beginning of Step 2: check/activate it directly
-    # after the meditation action, before the HP/MP readiness wait.
-    ensure_mana(
-        settings, project_root, link, skill_panel, window_title,
-        screen_capture_cls,
-    )
 
     return True
 

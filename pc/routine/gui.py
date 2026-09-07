@@ -103,7 +103,7 @@ class RoutineController:
 
         self.pre_step4_teleport_check = tk.Checkbutton(
             secondary_options,
-            text="4단계 시작 전 텔레포트",
+            text="ATS 활성화 후 텔레포트",
             variable=self.teleport_before_step4,
         )
         self.pre_step4_teleport_check.pack(anchor="w")

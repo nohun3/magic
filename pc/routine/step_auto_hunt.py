@@ -2,7 +2,7 @@
 
 [3단계](step_move_to_wasteland.py) 완료 후 실행한다.
 
-1. icon_ats_off를 더블클릭 -> icon_ats_on 상태로 토글.
+1. icon_ats_off가 보이면 F5를 눌러 ATS를 켠 뒤, 설정 시 F7 텔레포트.
 2. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
    - HP <= 70%가 2틱 연속 확인되면 F9 키를 두 번 입력하고, HP가 70%를
      초과할 때까지 매 감시 주기마다 반복한다.
@@ -61,8 +61,8 @@ from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.detector.chat_reader import KoreanTextReader, extract_dungeon_minutes  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
+from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, _capture_and_convert  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
 HP_HEAL_PERCENT = 70.0
@@ -74,7 +74,6 @@ HP_HEAL_CONSECUTIVE_TICKS = 2
 # does not mean the game accepted it. Let the teleport transition finish
 # before healing, hold F9 long enough to cross a game input poll, and do
 # not restart another teleport every monitor tick while HP is still low.
-EMERGENCY_TELEPORT_SETTLE_S = 1.5
 EMERGENCY_ACTION_COOLDOWN_S = 3.0
 HEEL_KEY_HOLD_MIN_MS = 50
 HEEL_KEY_HOLD_MAX_MS = 80
@@ -173,7 +172,7 @@ def toggle_ats_on(link: SerialLink, settings: dict, project_root: Path, skill_pa
                    window_title: str, screen_capture_cls) -> bool:
     """Ensures ATS ends up ON. ats_off/ats_on are a mutually-exclusive
     toggle pair (see icons config) -- if ats_off is present, ATS is
-    currently OFF, so double-click it. If it's not present, that's not
+    currently OFF, so press F5 once. If it's not present, that's not
     automatically a failure: on every loop after the first in
     pc/routine/run_all.py, ATS is already ON from the previous cycle (
     nothing turns it off in between), so ats_off legitimately won't be
@@ -182,12 +181,15 @@ def toggle_ats_on(link: SerialLink, settings: dict, project_root: Path, skill_pa
     if not ensure_skill_tab(link):
         print("    [ats_off] F2 keypress not ACKed")
         return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    frame, _ = _capture_and_convert(window_title, screen_capture_cls)
 
     ats_off = build_ats_off_detector(settings, project_root, skill_panel).measure(frame)
     if ats_off.present and ats_off.region is not None:
-        ok = double_click_region(link, converter, ats_off.region)
-        print(f"    [ats_off] double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+        ok, hold_ms = send_random_key_tap(link, "F5")
+        print(
+            f"    [ats_off] F5 ({hold_ms}ms) -> "
+            f"{'ok' if ok else 'FAILED (missing ACK)'}"
+        )
         return ok
 
     ats_on = build_ats_on_detector(settings, project_root, skill_panel).measure(frame)
@@ -329,8 +331,8 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
                     link, settings, project_root, skill_panel, window_title, screen_capture_cls
                 )
                 if teleported:
-                    print(f"    [emergency] waiting {EMERGENCY_TELEPORT_SETTLE_S:.1f}s for teleport transition...")
-                    sleep_jittered(EMERGENCY_TELEPORT_SETTLE_S)
+                    wait_s = sleep_transition_randomized()
+                    print(f"    [emergency] waited {wait_s:.2f}s for teleport transition")
                 else:
                     print("    [emergency] teleport failed; attempting heal in place")
                 healed = press_heel_key(link)
@@ -543,11 +545,26 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         link, settings, project_root, window_title, screen_capture_cls
     ):
         return False
-    print("[1/2] toggling ATS ON (double-clicking icon_ats_off)...")
+    print("[1/2] ensuring ATS ON (F5 when icon_ats_off is present)...")
     ok = toggle_ats_on(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
     if not ok:
-        print("[stop] could not toggle ATS on (neither ats_off nor ats_on present, or click failed).")
+        print("[stop] could not toggle ATS on (neither ats_off nor ats_on present, or F5 failed).")
         return False
+
+    routine_cfg = settings.get("routine", {})
+    if bool(routine_cfg.get("teleport_before_step4", True)):
+        print("[post-ATS] teleporting with F7 before monitoring starts...")
+        if not click_teleport_icon(
+            link, settings, project_root, skill_panel,
+            window_title, screen_capture_cls,
+        ):
+            print("[post-ATS] F7 teleport failed")
+            return False
+        wait_s = sleep_transition_randomized(
+            float(routine_cfg.get("pre_step4_teleport_settle_min_seconds", 0.5)),
+            float(routine_cfg.get("pre_step4_teleport_settle_max_seconds", 1.0)),
+        )
+        print(f"[post-ATS] waited {wait_s:.2f}s for teleport transition")
 
     dungeon_minutes = read_and_log_chat(
         settings, project_root, window_title, screen_capture_cls, korean_reader
