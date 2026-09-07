@@ -61,7 +61,7 @@ from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.detector.chat_reader import KoreanTextReader, extract_dungeon_minutes  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
+from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
 from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
@@ -513,6 +513,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     the monitoring loop ended via the MAX_TICKS
     safety fallback instead of the normal MP<=5% exit, or the hand-off
     itself failed."""
+    if not click_chat_region(
+        link, settings, project_root, window_title, screen_capture_cls
+    ):
+        return False
     print("[1/2] toggling ATS ON (double-clicking icon_ats_off)...")
     ok = toggle_ats_on(link, settings, project_root, skill_panel, window_title, screen_capture_cls)
     if not ok:

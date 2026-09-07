@@ -429,6 +429,30 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter,
     return True
 
 
+def click_chat_region(link: SerialLink, settings: dict, project_root: Path,
+                      window_title: str, screen_capture_cls) -> bool:
+    """Locate roi_chatting and click it once at the start of a step."""
+    chat_cfg = settings["chat"]
+    template = cv2.imread(str(project_root / chat_cfg["template"]))
+    if template is None:
+        print("  [step focus] roi_chatting template could not be loaded")
+        return False
+    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+    match = locate_template(
+        frame, template, float(chat_cfg.get("match_threshold", 0.5))
+    )
+    if match is None:
+        print("  [step focus] roi_chatting not found")
+        return False
+    set_cursor_park_region(match.region)
+    ok = click_region_once(link, converter, match.region)
+    print(
+        f"  [step focus] roi_chatting click -> "
+        f"{'ok' if ok else 'FAILED (missing ACK)'}"
+    )
+    return ok
+
+
 def _handle_event_if_present(
     settings: dict,
     project_root: Path,
@@ -607,6 +631,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     meditation buff actually came up and retry once if not (see module
     docstring). Returns False as soon as any sub-action fails to find
     its icon or ACK."""
+    if not click_chat_region(
+        link, settings, project_root, window_title, screen_capture_cls
+    ):
+        return False
     event_merchant_text = build_event_merchant_text_locator(
         settings, project_root, korean_reader
     )

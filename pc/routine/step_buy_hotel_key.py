@@ -50,7 +50,7 @@ from pc.detector.remembered_text import RememberedDialogText, first_matching  # 
 from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import ensure_skill_tab, _capture_and_convert  # noqa: E402
+from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, _capture_and_convert  # noqa: E402
 from pc.routine.step_move_to_wasteland import click_region_once, SPRITE_CLICK_JITTER  # noqa: E402
 from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
@@ -196,6 +196,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     OCR caches persist across repeated calls in a long-running loop
     instead of resetting every process invocation. Returns False as
     soon as any sub-action fails to find its target or ACK."""
+    if not click_chat_region(
+        link, settings, project_root, window_title, screen_capture_cls
+    ):
+        return False
     print("[1/5] talking_scroll: pressing F11 shortcut...")
     ok, hold_ms = send_random_key_tap(link, "F11")
     print(f"  F11 ({hold_ms}ms) -> {'ok' if ok else 'FAILED (missing ACK)'}")

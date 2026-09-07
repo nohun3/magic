@@ -69,7 +69,7 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import MatchResult, locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import double_click_region, park_cursor, _capture_and_convert  # noqa: E402
+from pc.routine.step_move_to_hotel import click_chat_region, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
 from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
 # How long to wait after pressing the teleport-scroll F10 shortcut before the
@@ -691,6 +691,10 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     every process invocation. Returns None when recovery through
     [2단계] is needed (critical HP or all gate attempts exhausted), and
     False when another sub-action fails or the location never confirms."""
+    if not click_chat_region(
+        link, settings, project_root, window_title, screen_capture_cls
+    ):
+        return False
     hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
