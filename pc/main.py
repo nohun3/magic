@@ -17,6 +17,7 @@ cleanup.
 """
 from __future__ import annotations
 
+import random
 import sys
 import time
 from pathlib import Path
@@ -42,6 +43,8 @@ from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.serial.port_finder import resolve_port  # noqa: E402
 
 HEARTBEAT_INTERVAL_S = 1.0  # keeps the Arduino's watchdog satisfied during idle periods
+KEY_TAP_HOLD_MIN_MS = 50
+KEY_TAP_HOLD_MAX_MS = 80
 
 
 def _build_capture(settings: Dict[str, Any]) -> ScreenCapture:
@@ -104,9 +107,17 @@ class MacroApp:
                 print(f"\n[TRIGGER] {action.condition_name} -> sequence {sequence_name}")
                 self.runner.start(sequence)
             else:
-                print(f"\n[TRIGGER] {action.condition_name} -> key {action.key}")
+                hold_ms = random.randint(KEY_TAP_HOLD_MIN_MS, KEY_TAP_HOLD_MAX_MS)
+                print(
+                    f"\n[TRIGGER] {action.condition_name} -> "
+                    f"key {action.key} ({hold_ms}ms)"
+                )
                 self.action_queue.push(
-                    QueuedAction(source=action.condition_name, command_type="KEY", args=action.key)
+                    QueuedAction(
+                        source=action.condition_name,
+                        command_type="KEY",
+                        args=f"{action.key} {hold_ms}",
+                    )
                 )
 
     def tick(self) -> Dict[str, Optional[float]]:

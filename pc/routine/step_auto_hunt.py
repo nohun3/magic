@@ -42,6 +42,7 @@ a Python input-simulation call -- see CLAUDE.md.
 """
 from __future__ import annotations
 
+import random
 import sys
 import time
 from datetime import datetime
@@ -76,8 +77,10 @@ HP_HEAL_CONSECUTIVE_TICKS = 2
 # not restart another teleport every monitor tick while HP is still low.
 EMERGENCY_TELEPORT_SETTLE_S = 1.5
 EMERGENCY_ACTION_COOLDOWN_S = 3.0
-HEEL_KEY_HOLD_MS = 100
-HEEL_KEY_INTERVAL_S = 0.12
+HEEL_KEY_HOLD_MIN_MS = 50
+HEEL_KEY_HOLD_MAX_MS = 80
+HEEL_KEY_INTERVAL_MIN_S = 0.10
+HEEL_KEY_INTERVAL_MAX_S = 0.15
 
 # Confirmed live: a single-tick OCR misread (e.g. "358" -> "3", a digit
 # dropped rather than the "/"-misread ResilientGaugeReader already
@@ -228,16 +231,22 @@ def press_heel_key(link: SerialLink) -> bool:
     """[4단계]'s heal action -- press F9 twice, per the user's explicit
     change from double-clicking icon_heel to a keyboard shortcut. No
     icon detection/F2 tab involved, unlike the other actions here."""
-    first = link.send_and_wait("KEY", f"F9 {HEEL_KEY_HOLD_MS}")
+    first_hold_ms = random.randint(HEEL_KEY_HOLD_MIN_MS, HEEL_KEY_HOLD_MAX_MS)
+    second_hold_ms = random.randint(HEEL_KEY_HOLD_MIN_MS, HEEL_KEY_HOLD_MAX_MS)
+    interval_s = random.uniform(
+        HEEL_KEY_INTERVAL_MIN_S, HEEL_KEY_INTERVAL_MAX_S
+    )
+    first = link.send_and_wait("KEY", f"F9 {first_hold_ms}")
     if first is None or not first.ok:
         print("    [heel] F9 (1st) -> FAILED (missing ACK)")
         return False
-    sleep_jittered(HEEL_KEY_INTERVAL_S)
-    second = link.send_and_wait("KEY", f"F9 {HEEL_KEY_HOLD_MS}")
+    sleep_jittered(interval_s, jitter_seconds=0.0)
+    second = link.send_and_wait("KEY", f"F9 {second_hold_ms}")
     ok = second is not None and second.ok
     print(
-        f"    [heel] F9 x2 (hold={HEEL_KEY_HOLD_MS}ms, "
-        f"gap={HEEL_KEY_INTERVAL_S:.2f}s) -> {'ok' if ok else 'FAILED (missing ACK)'}"
+        f"    [heel] F9 x2 (holds={first_hold_ms}/{second_hold_ms}ms, "
+        f"interval={interval_s * 1000:.0f}ms) -> "
+        f"{'ok' if ok else 'FAILED (missing ACK)'}"
     )
     return ok
 
