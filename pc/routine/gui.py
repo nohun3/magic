@@ -47,8 +47,7 @@ class RoutineController:
         self.root = root
         self.process: Optional[subprocess.Popen[str]] = None
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
-        self.pause_on_low_dungeon_time = tk.BooleanVar(value=False)
-        self.minimum_dungeon_minutes = tk.StringVar(value="9")
+        self.wait_on_low_screen_dungeon_time = tk.BooleanVar(value=True)
         self.teleport_before_step4 = tk.BooleanVar(value=True)
         self.teleport_on_mp_stagnation = tk.BooleanVar(value=True)
         self.step2_event_enabled = tk.BooleanVar(value=False)
@@ -80,24 +79,6 @@ class RoutineController:
         )
         self.stop_button.pack(side="left")
 
-        options = tk.Frame(root, padx=12, pady=4)
-        options.pack(fill="x")
-        self.low_dungeon_time_check = tk.Checkbutton(
-            options,
-            text="던전시간",
-            variable=self.pause_on_low_dungeon_time,
-        )
-        self.low_dungeon_time_check.pack(side="left")
-        self.minimum_dungeon_minutes_input = tk.Spinbox(
-            options,
-            from_=0,
-            to=999,
-            width=5,
-            textvariable=self.minimum_dungeon_minutes,
-        )
-        self.minimum_dungeon_minutes_input.pack(side="left", padx=(4, 4))
-        tk.Label(options, text="분 이하 시 대기").pack(side="left")
-
         secondary_options = tk.Frame(root, padx=12, pady=0)
         secondary_options.pack(fill="x")
 
@@ -114,6 +95,13 @@ class RoutineController:
             variable=self.teleport_on_mp_stagnation,
         )
         self.mp_stagnation_teleport_check.pack(anchor="w")
+
+        self.low_screen_dungeon_time_check = tk.Checkbutton(
+            secondary_options,
+            text="던전시간 5분 이하 시 대기",
+            variable=self.wait_on_low_screen_dungeon_time,
+        )
+        self.low_screen_dungeon_time_check.pack(anchor="w")
 
         self.step2_event_check = tk.Checkbutton(
             secondary_options,
@@ -149,23 +137,16 @@ class RoutineController:
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
             return
-        try:
-            minimum_dungeon_minutes = int(self.minimum_dungeon_minutes.get())
-            if minimum_dungeon_minutes < 0:
-                raise ValueError
-        except ValueError:
-            self._append("[GUI] 던전시간 기준은 0 이상의 정수로 입력하세요.\n")
-            return
         environment = os.environ.copy()
         environment["ROUTINE_CONTROL_STDIN"] = "1"
         # Windows otherwise encodes a piped Python stdout with the active
         # legacy code page (usually CP949), while this GUI reads UTF-8.
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
-        environment["ROUTINE_PAUSE_ON_LOW_DUNGEON_TIME"] = (
-            "1" if self.pause_on_low_dungeon_time.get() else "0"
+        environment["PYTHONUNBUFFERED"] = "1"
+        environment["ROUTINE_WAIT_ON_LOW_SCREEN_DUNGEON_TIME"] = (
+            "1" if self.wait_on_low_screen_dungeon_time.get() else "0"
         )
-        environment["ROUTINE_MIN_DUNGEON_MINUTES"] = str(minimum_dungeon_minutes)
         environment["ROUTINE_TELEPORT_BEFORE_STEP4"] = (
             "1" if self.teleport_before_step4.get() else "0"
         )
@@ -198,8 +179,7 @@ class RoutineController:
         self.desired_end_state = "중지"
         self._set_status("실행 중", "#15803d")
         self.start_button.config(state="disabled")
-        self.low_dungeon_time_check.config(state="disabled")
-        self.minimum_dungeon_minutes_input.config(state="disabled")
+        self.low_screen_dungeon_time_check.config(state="disabled")
         self.pre_step4_teleport_check.config(state="disabled")
         self.mp_stagnation_teleport_check.config(state="disabled")
         self.step2_event_check.config(state="disabled")
@@ -253,8 +233,7 @@ class RoutineController:
         colour = "#a16207" if state == "대기" else "#9b1c1c"
         self._set_status(state, colour)
         self.start_button.config(state="normal")
-        self.low_dungeon_time_check.config(state="normal")
-        self.minimum_dungeon_minutes_input.config(state="normal")
+        self.low_screen_dungeon_time_check.config(state="normal")
         self.pre_step4_teleport_check.config(state="normal")
         self.mp_stagnation_teleport_check.config(state="normal")
         self.step2_event_check.config(state="normal")

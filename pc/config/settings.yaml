@@ -62,17 +62,23 @@ hp:
 mp:
   content_offset: {left: 113, top: 20, width: 135, height: 31}
 
-# Chat log area -- read to find the dungeon-entry remaining-time
-# message (see pc/detector/chat_reader.py). Unlike hp/mp/icons, the
-# chat log's actual text content keeps changing (scrolling messages),
-# so a template captured from one moment won't pixel-match a later
-# frame's different text anywhere near as tightly -- match_threshold is
-# deliberately much lower here because this template match is only
-# locating the panel's stable position/structure, not verifying its
-# (constantly changing) content.
+# Chat log area used only as a safe focus-click target at routine starts.
+# Its contents are no longer OCR'd for dungeon time.
 chat:
   template: templates/roi_chatting.png
   match_threshold: 0.5
+
+# Blue HH:MM:SS dungeon countdown. It is found inside this small relative
+# search area by colour and strict time-format OCR. The changing EXP fill is
+# deliberately not used as a template anchor.
+dungeon_timer:
+  search_region: {left: 0.0, top: 0.60, right: 0.25, bottom: 1.0}
+  hsv_lower: [80, 60, 80]
+  hsv_upper: [130, 255, 255]
+  min_width: 55
+  max_width: 180
+  min_height: 10
+  max_height: 40
 
 # Skill/quick-slot panel -- icon presence checks (below) are scoped to
 # search only inside this region instead of the whole captured frame.
@@ -233,6 +239,13 @@ npcs:
     partial_match_threshold: 0.5
     partial_min_visible_fraction: 0.5
     partial_scan_step_px: 2
+    # Click only purple gate pixels that still resemble the template. Pixels
+    # changed by an overlapping monster are excluded from click candidates.
+    safe_click_purple_margin: 6
+    safe_click_color_difference: 60
+    safe_click_min_pixels: 20
+    safe_click_min_spacing_px: 18
+    safe_click_candidate_count: 5
 
 # Current location name (e.g. "오렌 마을", "버림받은 자들의 땅"), shown
 # top-left of the character-stat panel -- only visible outdoors (indoors/
@@ -351,11 +364,6 @@ step3:
 # Failed steps restart from the Step 2 entry precondition instead of terminating.
 routine:
   restart_delay_seconds: 5.0
-  # When enabled, a dungeon-time reading at or below this value pauses Step 3
-  # until the randomized morning resume window. Disable it to keep running
-  # Step 3 while still logging the reading and saving the low-time chat ROI.
-  pause_on_low_dungeon_time: false
-  minimum_dungeon_minutes_for_step3: 9
   # After ATS is enabled in Step 4, teleport once before monitoring starts.
   teleport_before_step4: true
   pre_step4_teleport_settle_min_seconds: 0.5
@@ -363,6 +371,13 @@ routine:
   # During Step 4, teleport when MP has not decreased for this many ticks.
   teleport_on_mp_stagnation: true
   mp_stagnant_ticks_before_teleport: 5
+  # In Step 4, five consecutive fresh screen-timer readings at or below
+  # five minutes finish combat, complete Step 2, then wait before Step 3.
+  dungeon_low_exit_seconds: 300
+  dungeon_low_consecutive_ticks: 5
+  wait_on_low_screen_dungeon_time: true
+  dungeon_low_resume_start_hour: 6
+  dungeon_low_resume_end_hour: 7
 
 # Serial link to the Arduino. `port` is Windows-specific (COMxx) and
 # changes on every upload/reset -- set it to "auto" (default) to have

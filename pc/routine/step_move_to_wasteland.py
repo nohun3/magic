@@ -416,6 +416,87 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
     )
 
 
+def _visible_gate_template(template: np.ndarray, region: Region,
+                           frame_width: int, frame_height: int) -> np.ndarray:
+    """Return the template slice represented by a full/edge-clipped match."""
+    th, tw = template.shape[:2]
+    visible_h = min(region.height, th)
+    visible_w = min(region.width, tw)
+
+    if visible_h < th and region.top <= 0:
+        y0 = th - visible_h
+    else:
+        y0 = 0
+    if visible_w < tw and region.left <= 0:
+        x0 = tw - visible_w
+    else:
+        x0 = 0
+
+    # A partial match on the bottom/right edge represents the template's
+    # top/left portion. Full matches naturally use zero offsets as well.
+    if region.top + region.height >= frame_height and visible_h < th:
+        y0 = 0
+    if region.left + region.width >= frame_width and visible_w < tw:
+        x0 = 0
+    return template[y0:y0 + visible_h, x0:x0 + visible_w]
+
+
+def find_gate_safe_click_points(frame: np.ndarray, template: np.ndarray,
+                                region: Region, gate_cfg: dict) -> List[Tuple[float, float]]:
+    """Find exposed gate pixels while excluding likely monster occlusion.
+
+    The purple portal foreground is taken from the original template. Pixels
+    whose current colour differs too much are treated as occluded. Spatially
+    separated maxima are returned so retries do not keep clicking one spot.
+    """
+    fh, fw = frame.shape[:2]
+    left = max(0, region.left)
+    top = max(0, region.top)
+    right = min(fw, region.left + region.width)
+    bottom = min(fh, region.top + region.height)
+    if right <= left or bottom <= top:
+        return []
+
+    visible_template = _visible_gate_template(template, region, fw, fh)
+    live = frame[top:bottom, left:right]
+    height = min(live.shape[0], visible_template.shape[0])
+    width = min(live.shape[1], visible_template.shape[1])
+    live = live[:height, :width]
+    reference = visible_template[:height, :width]
+
+    b, g, r = cv2.split(reference.astype(np.int16))
+    purple_margin = int(gate_cfg.get("safe_click_purple_margin", 6))
+    foreground = ((b - g >= purple_margin) & (r - g >= purple_margin))
+
+    color_threshold = int(gate_cfg.get("safe_click_color_difference", 60))
+    difference = np.max(
+        np.abs(live.astype(np.int16) - reference.astype(np.int16)), axis=2
+    )
+    candidate = foreground & (difference <= color_threshold)
+
+    # Remove isolated matching noise and keep clicks away from a candidate's
+    # boundary. This favors a broad, visibly intact part of the portal.
+    mask = candidate.astype(np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    min_pixels = int(gate_cfg.get("safe_click_min_pixels", 20))
+    if int(np.count_nonzero(mask)) < min_pixels:
+        return []
+
+    distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    points: List[Tuple[float, float]] = []
+    min_spacing = max(1, int(gate_cfg.get("safe_click_min_spacing_px", 18)))
+    max_points = max(1, int(gate_cfg.get("safe_click_candidate_count", 5)))
+    working = distance.copy()
+    for _ in range(max_points):
+        _, best_distance, _, best_location = cv2.minMaxLoc(working)
+        if best_distance < 1.0:
+            break
+        x, y = best_location
+        points.append((float(left + x), float(top + y)))
+        cv2.circle(working, (x, y), min_spacing, 0.0, thickness=-1)
+    return points
+
+
 # npc_teleport_gate sits out in the open world, where a monster can walk
 # in front of it (or spawn on top of it) between the moment we locate it
 # and the moment the click lands -- confirmed live: the click landed on
@@ -490,6 +571,12 @@ def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: flo
 def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region: Region, jitter: float = TEXT_CLICK_JITTER) -> bool:
     fx = region.left + region.width * (0.5 + random.uniform(-jitter, jitter))
     fy = region.top + region.height * (0.5 + random.uniform(-jitter, jitter))
+    return click_frame_point_once(link, converter, fx, fy)
+
+
+def click_frame_point_once(link: SerialLink, converter: FrameToMouseConverter,
+                           fx: float, fy: float) -> bool:
+    """Click one exact frame coordinate through the Arduino HID link."""
     ux, uy = converter.convert(fx, fy)
 
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
@@ -858,8 +945,33 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 print(f"    saved pre-click game frame: {debug_path}")
             else:
                 print("    [warn] failed to save pre-click game frame")
-            ok = click_region_once(link, converter, gate_match.region, jitter=SPRITE_CLICK_JITTER)
-            print(f"    click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+            safe_points = (
+                find_gate_safe_click_points(
+                    frame, gate_template, gate_match.region, gate_cfg
+                )
+                if gate_template is not None else []
+            )
+            if safe_points:
+                safe_index = min(attempt - 1, len(safe_points) - 1)
+                safe_x, safe_y = safe_points[safe_index]
+                ok = click_frame_point_once(link, converter, safe_x, safe_y)
+                print(
+                    f"    exposed gate click ({safe_x:.0f}, {safe_y:.0f}), "
+                    f"candidate {safe_index + 1}/{len(safe_points)} -> "
+                    f"{'ok' if ok else 'FAILED (missing ACK)'}"
+                )
+            else:
+                print(
+                    "    no reliable exposed gate pixels; skipping click "
+                    "to avoid selecting an overlapping monster"
+                )
+                if attempt < GATE_CLICK_MAX_ATTEMPTS:
+                    print(
+                        f"    waiting {GATE_RETRY_INTERVAL_S}s for a fresh "
+                        "unoccluded frame..."
+                    )
+                    sleep_jittered(GATE_RETRY_INTERVAL_S)
+                continue
             if not ok:
                 return False
 

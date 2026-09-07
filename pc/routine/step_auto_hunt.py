@@ -44,11 +44,8 @@ from __future__ import annotations
 import random
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-import cv2
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -58,8 +55,8 @@ from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
-from pc.detector.chat_reader import KoreanTextReader, extract_dungeon_minutes  # noqa: E402
-from pc.detector.template_locator import locate_template  # noqa: E402
+from pc.detector.chat_reader import KoreanTextReader  # noqa: E402
+from pc.detector.dungeon_timer import DungeonTimerDetector  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import click_chat_region, ensure_skill_tab, _capture_and_convert  # noqa: E402
 from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
@@ -95,69 +92,24 @@ MP_EXIT_CONSECUTIVE_TICKS = 2
 # non-decreasing tick was too trigger-happy. Only teleport once MP has
 # failed to drop for this many *consecutive* ticks in a row.
 MP_STAGNANT_TICKS_BEFORE_TELEPORT = 5
+LOW_DUNGEON_TIME = "low_dungeon_time"
 
 # Safety cap so a stuck read (e.g. HP/MP anchor never re-appears) can't
 # spin this forever unattended -- normal exit is always the MP <= 5%
 # condition well before this. ~2 hours at MONITOR_INTERVAL_S=1.0.
 MAX_TICKS = 7200
 
+_last_step2_failure_reason: Optional[str] = None
 
-def read_and_log_chat(settings: dict, project_root: Path, window_title: str,
-                      screen_capture_cls,
-                      reader: KoreanTextReader,
-                      save_if_at_or_below: Optional[int] = None) -> Optional[int]:
-    """OCR chat, print it, and return the dungeon minutes when present."""
-    try:
-        chat_cfg = settings["chat"]
-        template = cv2.imread(str(project_root / chat_cfg["template"]))
-        if template is None:
-            print("  [chat OCR] template could not be loaded")
-            return None
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        match = locate_template(
-            frame, template, float(chat_cfg.get("match_threshold", 0.5))
-        )
-        if match is None:
-            print("  [chat OCR] chat region not found")
-            return None
-        region = match.region
-        crop = frame[
-            region.top:region.top + region.height,
-            region.left:region.left + region.width,
-        ]
-        lines = reader.read_lines(crop)
-        if not lines:
-            print("  [chat OCR] no text recognized")
-            return None
-        print(f"  [chat OCR] {len(lines)} line(s):")
-        for index, line in enumerate(lines, start=1):
-            print(f"    [{index:02d}] {line}")
-        dungeon_minutes = extract_dungeon_minutes(lines)
-        if dungeon_minutes is not None:
-            print(f"  [chat OCR] dungeon_minutes={dungeon_minutes}")
-            if (
-                save_if_at_or_below is not None
-                and dungeon_minutes <= save_if_at_or_below
-            ):
-                output_dir = project_root / "output" / "low_dungeon_time_chat_roi"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                output_path = output_dir / (
-                    f"roi_chat_{timestamp}_{dungeon_minutes}min.png"
-                )
-                if cv2.imwrite(str(output_path), crop):
-                    print(f"  [chat OCR] low-time ROI saved: {output_path}")
-                else:
-                    print(f"  [chat OCR] failed to save low-time ROI: {output_path}")
-        else:
-            print("  [chat OCR] dungeon_minutes not found")
-        return dungeon_minutes
-    except Exception as error:
-        # Chat logging is diagnostic only. A transient OCR/capture failure
-        # must never stop ATS monitoring or trigger routine recovery.
-        print(f"  [chat OCR] failed: {type(error).__name__}: {error}")
-        return None
+
+def _set_step2_failure(reason: str) -> None:
+    global _last_step2_failure_reason
+    _last_step2_failure_reason = reason
+    print(f"  [2단계 실패 원인] {reason}")
+
+
+def get_last_step2_failure_reason() -> str:
+    return _last_step2_failure_reason or "상세 원인을 확인하지 못했습니다"
 
 
 def build_ats_off_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -237,7 +189,8 @@ def press_heel_key(link: SerialLink) -> bool:
 
 
 def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
-                           hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
+                           hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                           dungeon_timer: Optional[DungeonTimerDetector] = None) -> bool | str:
     """Runs the 1-second monitoring loop until MP <= MP_EXIT_PERCENT for
     MP_EXIT_CONSECUTIVE_TICKS ticks in a row (or MAX_TICKS is hit, as a
     safety fallback). Returns True if it's time to
@@ -258,10 +211,20 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
             )
         ),
     )
+    dungeon_low_exit_seconds = max(
+        0, int(routine_cfg.get("dungeon_low_exit_seconds", 300))
+    )
+    dungeon_low_consecutive_ticks = max(
+        1, int(routine_cfg.get("dungeon_low_consecutive_ticks", 5))
+    )
+    wait_on_low_screen_dungeon_time = bool(
+        routine_cfg.get("wait_on_low_screen_dungeon_time", True)
+    )
     last_mp_current: Optional[int] = None
     stagnant_ticks = 0
     low_mp_ticks = 0
     low_heal_ticks = 0
+    low_dungeon_ticks = 0
     last_emergency_time: Optional[float] = None
     heal_baseline_hp: Optional[int] = None
     ats_off_detector = build_ats_off_detector(settings, project_root, skill_panel)
@@ -280,7 +243,42 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
 
         hp = hp_result.reading
         mp = mp_result.reading
-        print(f"  tick {tick}: HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%)")
+        screen_timer = dungeon_timer.measure(frame) if dungeon_timer is not None else None
+        retained_timer_text = dungeon_timer.last_text if dungeon_timer is not None else None
+        if screen_timer is not None:
+            dungeon_time_log = f"던전시간 {screen_timer.text}"
+        elif retained_timer_text is not None:
+            dungeon_time_log = f"던전시간 {retained_timer_text} (마지막 판독)"
+        else:
+            dungeon_time_log = "던전시간 알 수 없음"
+        print(
+            f"  tick {tick}: HP {hp.current}/{hp.maximum} ({hp.percent:.1f}%)  "
+            f"MP {mp.current}/{mp.maximum} ({mp.percent:.1f}%)  "
+            f"{dungeon_time_log}",
+            flush=True,
+        )
+
+        if (
+            wait_on_low_screen_dungeon_time
+            and
+            screen_timer is not None
+            and screen_timer.total_seconds <= dungeon_low_exit_seconds
+        ):
+            low_dungeon_ticks += 1
+            print(
+                f"    던전시간 <= {dungeon_low_exit_seconds // 60}분 "
+                f"({low_dungeon_ticks}/{dungeon_low_consecutive_ticks} consecutive ticks)"
+            )
+            if low_dungeon_ticks >= dungeon_low_consecutive_ticks:
+                print(
+                    "    [dungeon exit] low dungeon time confirmed -- "
+                    "ending [4단계] and handing off to [2단계]"
+                )
+                return LOW_DUNGEON_TIME
+        else:
+            # Only a fresh on-screen reading counts. A failed OCR tick or a
+            # retained old value cannot advance this safety transition.
+            low_dungeon_ticks = 0
 
         ats_off = ats_off_detector.measure(frame)
         if ats_off.present:
@@ -380,14 +378,15 @@ def _monitor_and_hunt_impl(link: SerialLink, settings: dict, project_root: Path,
 
 
 def monitor_and_hunt(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
-                     hp_detector, mp_detector, window_title: str, screen_capture_cls) -> bool:
+                     hp_detector, mp_detector, window_title: str, screen_capture_cls,
+                     dungeon_timer: Optional[DungeonTimerDetector] = None) -> bool | str:
     """Time the complete Step 4 combat monitor, including abnormal exits."""
     started_at = time.monotonic()
     print("  [4단계 시간] 전투 시간 측정 시작")
     try:
         return _monitor_and_hunt_impl(
             link, settings, project_root, skill_panel, hp_detector, mp_detector,
-            window_title, screen_capture_cls,
+            window_title, screen_capture_cls, dungeon_timer,
         )
     finally:
         elapsed = time.monotonic() - started_at
@@ -452,6 +451,7 @@ def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
             link, skill_panel, window_title, screen_capture_cls
         ):
             print("  [hotel key] skill panel unavailable")
+            _set_step2_failure("F2 입력 후 roi_skill 패널을 인식하지 못해 여관 열쇠를 확인할 수 없음")
             return False
         with screen_capture_cls(window_title=window_title) as cap:
             frame = cap.grab()
@@ -466,6 +466,7 @@ def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
             return True
         if check_attempt == 2:
             print("  [hotel key] still absent after [1단계]")
+            _set_step2_failure("1단계 실행 후에도 여관 열쇠가 감지되지 않음")
             return False
 
         print("  hotel_key not present -- running [1단계] first...")
@@ -474,7 +475,9 @@ def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
             hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
         ):
             print("  [1단계] failed.")
+            _set_step2_failure("여관 열쇠가 없어 실행한 1단계 열쇠 구매가 실패함")
             return False
+    _set_step2_failure("여관 열쇠 확인이 완료되지 않음")
     return False
 
 
@@ -494,6 +497,8 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     the exact same "ensure the precondition, run [2단계], wait for full
     MP" sequence the user specified."""
     import pc.routine.step_move_to_hotel as step2
+    global _last_step2_failure_reason
+    _last_step2_failure_reason = None
     mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
 
     while True:
@@ -513,6 +518,7 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
         skip_hotel_teleport_once = False
         if not ok:
             print("  [2단계] failed.")
+            _set_step2_failure("여관 이동·명상 실행 과정이 실패함")
             return False
         _wait_for_ready_hp_mp(
             hp_detector, mp_detector, window_title, screen_capture_cls,
@@ -524,6 +530,7 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
         )
         if haste_result is False:
             print("  [2단계] haste preparation failed.")
+            _set_step2_failure("3단계 진입 전 가속 버프 준비가 실패함")
             return False
         if haste_result is None:
             return True
@@ -531,7 +538,8 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
-        screen_capture_cls, korean_reader: KoreanTextReader) -> bool:
+        screen_capture_cls, korean_reader: KoreanTextReader,
+        dungeon_timer: Optional[DungeonTimerDetector] = None) -> bool | str:
     """Full [4단계]: ATS toggle + 1s monitoring loop + auto-handoff to
     [2단계] (via ensure_step2(), including its own [1단계]-if-needed
     precondition and MP-100% wait) once MP <= 5%, as a reusable function
@@ -566,14 +574,13 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         )
         print(f"[post-ATS] waited {wait_s:.2f}s for teleport transition")
 
-    dungeon_minutes = read_and_log_chat(
-        settings, project_root, window_title, screen_capture_cls, korean_reader
+    print("[2/2] monitoring HP/MP every 1s until MP <= 5%...")
+    monitor_result = monitor_and_hunt(
+        link, settings, project_root, skill_panel, hp_detector, mp_detector,
+        window_title, screen_capture_cls, dungeon_timer,
     )
 
-    print("[2/2] monitoring HP/MP every 1s until MP <= 5%...")
-    should_hand_off = monitor_and_hunt(link, settings, project_root, skill_panel, hp_detector, mp_detector, window_title, screen_capture_cls)
-
-    if not should_hand_off:
+    if not monitor_result:
         print("[stop] not handing off to [2단계] -- monitoring loop ended abnormally (see [warn] above).")
         return False
 
@@ -582,7 +589,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                        hotel_text, rent_room_text, ok_button_text,
                        screen_capture_cls, korean_reader)
     print(f"[2단계] handoff -> {'ok' if ok else 'FAILED'}")
-    return ok
+    if not ok:
+        return False
+    return LOW_DUNGEON_TIME if monitor_result == LOW_DUNGEON_TIME else True
 
 
 def main() -> None:
@@ -603,6 +612,9 @@ def main() -> None:
     print("Loading OCR models (HP/MP gauge + Korean dialog)...")
     gauge_reader = GaugeTextReader()
     hp_detector, mp_detector = build_hp_mp_detectors(settings, _PROJECT_ROOT, gauge_reader)
+    dungeon_timer = DungeonTimerDetector(
+        gauge_reader, settings.get("dungeon_timer", {})
+    )
 
     # Only needed for ensure_step2()'s [1단계]-if-needed fallback, but
     # built unconditionally -- cheap (no OCR runs until actually used)
@@ -624,7 +636,7 @@ def main() -> None:
 
             ok = run(settings, _PROJECT_ROOT, window_title, link, skill_panel, hp_detector, mp_detector,
                      hotel_text, rent_room_text, ok_button_text, ScreenCapture,
-                     korean_reader)
+                     korean_reader, dungeon_timer=dungeon_timer)
             if not ok:
                 sys.exit(1)
     except WindowNotFoundError as e:

@@ -1,5 +1,4 @@
-"""Reads the dungeon-entry remaining-time message out of the chat log
-area (see templates/roi_chatting.png).
+"""Korean OCR helpers for game dialogs.
 
 Unlike the HP/MP gauge text (always exactly one "current/max" line of
 digits/Latin characters), the chat log is mostly Korean and scrolls
@@ -11,56 +10,16 @@ through many unrelated system/chat messages at once. Two consequences:
   KoreanTextReader here uses "korean_PP-OCRv5_mobile_rec" instead, which
   reads it correctly. That means chat reading needs a second OCR model
   loaded alongside GaugeTextReader's, not a shared one.
-- Instead of assuming there's one line of interesting text, this scans
-  every OCR'd line for the specific "던전 시간 N분 남았습니다" pattern
-  and returns the first match. No match is a normal outcome (the
-  message isn't always on screen), not a failure.
-
-Also notably slower than HP/MP: OCR-ing the whole chat panel (~800x190px,
-several lines of text) takes ~4s per call vs. HP/MP's ~180ms for a tiny
-digit strip -- fine given dungeon time only needs checking every so
-often, not every frame.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 from paddleocr import PaddleOCR
 
 from pc.capture.screen_capture import Region
-
-# Identify messages such as
-# "dungeon time is 147 minutes remaining (account balance: 147 minutes)".
-# Unicode escapes keep the Korean pattern stable across terminal code pages.
-_DUNGEON_TIME_PATTERN = re.compile(
-    r"\ub358\uc804\s*\uc2dc\uac04\uc774?\s*(\d+)\s*\ubd84\s*\ub0a8\uc558\uc2b5\ub2c8\ub2e4"
-)
-_MINUTES_IN_LINE_PATTERN = re.compile(r"(\d+)\s*\ubd84")
-
-
-def _minutes_from_dungeon_line(line: str) -> Optional[int]:
-    """Parse one dungeon message conservatively.
-
-    The message can repeat the duration later on the same line (for
-    example as an account balance).  PaddleOCR has been observed to read
-    the leading ``50`` as ``5`` while reading the repeated ``50``
-    correctly.  Taking only the first capture therefore caused a false
-    low-time shutdown.  Once the line is confirmed to be a dungeon-time
-    message, use the largest minute value printed on that line.
-    """
-    if _DUNGEON_TIME_PATTERN.search(line) is None:
-        return None
-    values = [int(value) for value in _MINUTES_IN_LINE_PATTERN.findall(line)]
-    return max(values) if values else None
-
-
-@dataclass
-class DungeonTimeReading:
-    minutes_remaining: int
-
 
 class KoreanTextReader:
     """Same shape as GaugeTextReader (own PaddleOCR instance, `read_lines()`),
@@ -138,25 +97,4 @@ def find_text_region(lines_with_boxes: List[Tuple[str, Region]], *needles: str) 
     for text, region in lines_with_boxes:
         if match_fn(text):
             return region
-    return None
-
-
-class DungeonTimeReader:
-    def __init__(self, reader: KoreanTextReader):
-        self._reader = reader
-
-    def read(self, crop_bgr: np.ndarray) -> Optional[DungeonTimeReading]:
-        for line in self._reader.read_lines(crop_bgr):
-            minutes = _minutes_from_dungeon_line(line)
-            if minutes is not None:
-                return DungeonTimeReading(minutes_remaining=minutes)
-        return None
-
-
-def extract_dungeon_minutes(lines: List[str]) -> Optional[int]:
-    """Return the first valid dungeon message's conservative duration."""
-    for line in lines:
-        minutes = _minutes_from_dungeon_line(line)
-        if minutes is not None:
-            return minutes
     return None

@@ -9,11 +9,8 @@ fast but fragile (MP's fill/empty colors were subtle enough that
 lighting/theme changes threw it off). Reading the game's own printed
 numbers via OCR is far more reliable.
 
-It turned out to generalize cleanly to other "find a region, read
-something out of it" cases -- e.g. pc/detector/chat_reader.py's
-DungeonTimeReader scans the chat log for a specific message instead of
-a "current/max" pair -- so `reader` just needs a `.read(crop) ->
-Optional[T]` method; GaugeDetector doesn't care what T is.
+The reader only needs a `.read(crop) -> Optional[T]` method;
+GaugeDetector does not depend on a particular reading type.
 
 Template matching itself is not cheap (~150ms on a full 1080p-ish
 frame), and the target region doesn't move once the game window is up,

@@ -46,6 +46,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.chat_reader import KoreanTextReader  # noqa: E402
+from pc.detector.dungeon_timer import DungeonTimerDetector  # noqa: E402
 from pc.detector.ocr_reader import GaugeTextReader  # noqa: E402
 from pc.detector.hpmp import build_hp_mp_detectors  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
@@ -62,11 +63,6 @@ import pc.routine.step_auto_hunt as step4  # noqa: E402
 
 
 DEFAULT_RESTART_DELAY_S = 5.0
-DEFAULT_MIN_DUNGEON_MINUTES_FOR_STEP3 = 9
-RESUME_WINDOW_START_HOUR = 7
-RESUME_WINDOW_START_MINUTE = 30
-RESUME_WINDOW_END_HOUR = 8
-RESUME_WINDOW_END_MINUTE = 30
 WAIT_POLL_SECONDS = 30.0
 
 _routine_log_file: TextIO | None = None
@@ -113,20 +109,11 @@ def _enable_file_logging() -> Path:
     return log_path
 
 
-def _choose_resume_time(now: datetime) -> datetime:
-    """Choose one future time in the next available 07:30-08:30 window."""
-    start = now.replace(
-        hour=RESUME_WINDOW_START_HOUR,
-        minute=RESUME_WINDOW_START_MINUTE,
-        second=0,
-        microsecond=0,
-    )
-    end = now.replace(
-        hour=RESUME_WINDOW_END_HOUR,
-        minute=RESUME_WINDOW_END_MINUTE,
-        second=0,
-        microsecond=0,
-    )
+def _choose_low_dungeon_resume_time(now: datetime, start_hour: int,
+                                    end_hour: int) -> datetime:
+    """Choose a future time in today's/next day's low-dungeon window."""
+    start = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
     if now >= end:
         start += timedelta(days=1)
         end += timedelta(days=1)
@@ -185,23 +172,32 @@ def _run_once() -> float:
         settings.get("routine", {}).get("restart_delay_seconds", DEFAULT_RESTART_DELAY_S)
     )
     routine_cfg = settings.get("routine", {})
-    pause_on_low_dungeon_time = bool(
-        routine_cfg.get("pause_on_low_dungeon_time", True)
+    low_dungeon_resume_start_hour = int(
+        routine_cfg.get("dungeon_low_resume_start_hour", 6)
     )
-    pause_override = os.environ.get("ROUTINE_PAUSE_ON_LOW_DUNGEON_TIME")
-    if pause_override is not None:
-        pause_on_low_dungeon_time = pause_override.strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-    minimum_dungeon_minutes = int(
-        routine_cfg.get(
-            "minimum_dungeon_minutes_for_step3",
-            DEFAULT_MIN_DUNGEON_MINUTES_FOR_STEP3,
+    low_dungeon_resume_end_hour = int(
+        routine_cfg.get("dungeon_low_resume_end_hour", 7)
+    )
+    low_dungeon_exit_seconds = int(
+        routine_cfg.get("dungeon_low_exit_seconds", 300)
+    )
+    low_dungeon_consecutive_ticks = int(
+        routine_cfg.get("dungeon_low_consecutive_ticks", 5)
+    )
+    wait_on_low_screen_dungeon_time = bool(
+        routine_cfg.get("wait_on_low_screen_dungeon_time", True)
+    )
+    low_screen_wait_override = os.environ.get(
+        "ROUTINE_WAIT_ON_LOW_SCREEN_DUNGEON_TIME"
+    )
+    if low_screen_wait_override is not None:
+        wait_on_low_screen_dungeon_time = (
+            low_screen_wait_override.strip().lower()
+            in {"1", "true", "yes", "on"}
         )
+    routine_cfg["wait_on_low_screen_dungeon_time"] = (
+        wait_on_low_screen_dungeon_time
     )
-    minimum_minutes_override = os.environ.get("ROUTINE_MIN_DUNGEON_MINUTES")
-    if minimum_minutes_override is not None:
-        minimum_dungeon_minutes = max(0, int(minimum_minutes_override))
     teleport_before_step4 = bool(routine_cfg.get("teleport_before_step4", True))
     teleport_override = os.environ.get("ROUTINE_TELEPORT_BEFORE_STEP4")
     if teleport_override is not None:
@@ -217,17 +213,16 @@ def _run_once() -> float:
         )
     routine_cfg["teleport_before_step4"] = teleport_before_step4
     print(
-        "[config] low dungeon-time pause: "
-        f"{'enabled' if pause_on_low_dungeon_time else 'disabled'} "
-        f"(at or below {minimum_dungeon_minutes} minutes)"
-    )
-    print(
         "[config] teleport before Step 4: "
         f"{'enabled' if teleport_before_step4 else 'disabled'}"
     )
     print(
         "[config] teleport on MP stagnation: "
         f"{'enabled' if routine_cfg.get('teleport_on_mp_stagnation', True) else 'disabled'}"
+    )
+    print(
+        "[config] wait when screen dungeon time <= 5 minutes: "
+        f"{'enabled' if wait_on_low_screen_dungeon_time else 'disabled'}"
     )
     print(
         "[config] Step 2 missing-buff_event handling: "
@@ -244,6 +239,9 @@ def _run_once() -> float:
     korean_reader = KoreanTextReader()
     gauge_reader = GaugeTextReader()
     hp_detector, mp_detector = build_hp_mp_detectors(settings, project_root, gauge_reader)
+    dungeon_timer = DungeonTimerDetector(
+        gauge_reader, settings.get("dungeon_timer", {})
+    )
 
     # [1단계]'s text locators -- only actually OCR'd if/when hotel_key
     # turns out to be missing (ensure_step2() checks first), but built
@@ -281,52 +279,15 @@ def _run_once() -> float:
                                      hotel_text, rent_room_text, ok_button_text,
                                      routine_capture_cls, korean_reader)
             if not ok:
-                print("[stop] 초기 진입 실패.")
+                print(
+                    "[stop] 초기 진입 실패: "
+                    f"{step4.get_last_step2_failure_reason()}"
+                )
                 return restart_delay_s
 
             cycle = 0
-            skip_dungeon_check_once = False
             while True:
                 cycle += 1
-                if skip_dungeon_check_once:
-                    skip_dungeon_check_once = False
-                    dungeon_minutes = None
-                    print("[pre-step3] post-reset cycle -- skipping stale chat check once")
-                else:
-                    print("[pre-step3] reading dungeon time from chat...")
-                    dungeon_minutes = step4.read_and_log_chat(
-                        settings, project_root, window_title, routine_capture_cls,
-                        korean_reader,
-                        save_if_at_or_below=minimum_dungeon_minutes,
-                    )
-                if (
-                    pause_on_low_dungeon_time
-                    and dungeon_minutes is not None
-                    and dungeon_minutes <= minimum_dungeon_minutes
-                ):
-                    resume_at = _choose_resume_time(datetime.now())
-                    print(
-                        f"[wait] dungeon_minutes={dungeon_minutes} is at or below "
-                        f"{minimum_dungeon_minutes}; Step 3 is paused."
-                    )
-                    print(
-                        f"[wait] no input until randomized resume time: "
-                        f"{resume_at:%Y-%m-%d %H:%M:%S}"
-                    )
-                    _wait_until_resume(resume_at)
-                    print("[resume] randomized time reached -- restarting from Step 2")
-                    ok = step4.ensure_step2(
-                        settings, project_root, window_title, link, skill_panel,
-                        hp_detector, mp_detector, hotel_text, rent_room_text,
-                        ok_button_text, routine_capture_cls, korean_reader,
-                        force_run=True,
-                    )
-                    if not ok:
-                        print("[resume] Step 2 failed; returning to normal recovery")
-                        return restart_delay_s
-                    skip_dungeon_check_once = True
-                    cycle -= 1
-                    continue
                 print("[pre-step3] checking hotel_key precondition...")
                 if not step4.ensure_hotel_key(
                     settings, project_root, window_title, link, skill_panel,
@@ -362,12 +323,31 @@ def _run_once() -> float:
                     return restart_delay_s
 
                 print(f"===== 사이클 {cycle}: [4단계] ATS + 사냥 (MP<=5% 시 내부적으로 다음 사이클 진입까지 처리) =====")
-                ok = step4.run(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
-                                hotel_text, rent_room_text, ok_button_text,
-                                routine_capture_cls, korean_reader)
-                if not ok:
+                step4_result = step4.run(
+                    settings, project_root, window_title, link, skill_panel,
+                    hp_detector, mp_detector, hotel_text, rent_room_text,
+                    ok_button_text, routine_capture_cls, korean_reader,
+                    dungeon_timer=dungeon_timer,
+                )
+                if not step4_result:
                     print(f"[stop] 사이클 {cycle}: [4단계] (또는 그 안의 다음 사이클 진입) 실패.")
                     return restart_delay_s
+                if step4_result == step4.LOW_DUNGEON_TIME:
+                    resume_at = _choose_low_dungeon_resume_time(
+                        datetime.now(), low_dungeon_resume_start_hour,
+                        low_dungeon_resume_end_hour,
+                    )
+                    print(
+                        f"[wait] 던전시간 {low_dungeon_exit_seconds // 60}분 이하가 "
+                        f"{low_dungeon_consecutive_ticks}틱 연속 확인됨; "
+                        "2단계 완료 후 3단계 진입을 중지합니다."
+                    )
+                    print(
+                        "[wait] 입력 없이 대기; 무작위 재개 시각: "
+                        f"{resume_at:%Y-%m-%d %H:%M:%S}"
+                    )
+                    _wait_until_resume(resume_at)
+                    print("[resume] 무작위 재개 시각 도달 -- 정상 3단계 진입 재개")
     except WindowNotFoundError as e:
         print(f"[error] {e}")
         return restart_delay_s
