@@ -6,7 +6,7 @@
 2. 그 뒤 1초 간격으로 HP/MP를 계속 읽으면서:
    - HP <= 70%가 2틱 연속 확인되면 F9 키를 두 번 입력하고, HP가 70%를
      초과할 때까지 매 감시 주기마다 반복한다.
-   - HP <= 50% 이면 icon_teleport 더블클릭 -> F9 키 두 번 입력 (위기 대응: 일단
+   - HP <= 50% 이면 F7 텔레포트 -> F9 키 두 번 입력 (위기 대응: 일단
      자리를 피하고 힐). 힐은 원래 icon_heel 더블클릭이었는데, 사용자 요청으로 F9
      키보드 단축키 두 번으로 변경했다 (press_heel_key()) -- 아이콘 탐지/F2 탭
      전환이 필요 없어서 더 빠르다.
@@ -18,7 +18,7 @@
      반응하지 않는 이유는 실기에서 확인됨: OCR이 자릿수를 통째로 잘못 읽어
      (예: "358"을 "3"으로) MP가 실제로는 70% 넘게 남아있는데도 5% 이하로
      오인식해서 여관키를 쓴 적이 있었다.
-   - (위 두 경우가 아니면) MP가 5틱 연속으로 줄지 않았으면 icon_teleport 더블클릭
+   - (위 두 경우가 아니면) MP가 5틱 연속으로 줄지 않았으면 F7 텔레포트
      -- 자동사냥(ATS)이 스킬을 쓰면 MP가 소모되는데, 그게 계속 안 줄었다는 건 근처에
      잡을 몬스터가 없어서 ATS가 멈춰 있다는 뜻으로 보고, 사냥터를 옮기기 위해 다시
      텔레포트한다. 1틱만 보고 바로 반응하면 OCR/타이밍 노이즈(스킬이 마침 그 틱에
@@ -31,9 +31,8 @@ MP 5% 이하 복귀 조건을 HP 비상 텔레포트보다 먼저 평가한다. 
 [2단계]로 복귀한다. HP가 안전하면 기존처럼 MP 2틱 연속 확인으로 OCR
 오판을 방지한다.
 
-icon_ats_off/icon_teleport 둘 다 hotel_key/meditation과 같은 F2
-quick-slot 탭에 있으므로 step_move_to_hotel의
-ensure_skill_tab()/double_click_region()을 그대로 재사용한다. HP/MP 판독은
+icon_ats_off는 hotel_key/meditation과 같은 F2 quick-slot 탭에서 확인하고,
+텔레포트는 icon_teleport 이미지 탐색 대신 F7 단축키를 사용한다. HP/MP 판독은
 pc/detector/hpmp.py의 앵커+오프셋 방식 감지기를 그대로 쓴다 (이 프로젝트에서 가장
 많이 검증된 부분).
 
@@ -63,7 +62,7 @@ from pc.detector.chat_reader import KoreanTextReader, extract_dungeon_minutes  #
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import ensure_skill_tab, double_click_region, _capture_and_convert  # noqa: E402
-from pc.routine.timing import sleep_jittered  # noqa: E402
+from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 
 MONITOR_INTERVAL_S = 1.0
 HP_HEAL_PERCENT = 70.0
@@ -170,27 +169,6 @@ def build_ats_on_detector(settings: dict, project_root: Path, skill_panel: Skill
     return build_icon_detector(settings["icons"]["ats_on"], project_root, panel=skill_panel)
 
 
-def build_teleport_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["teleport"], project_root, panel=skill_panel)
-
-
-def _click_icon(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
-                 window_title: str, screen_capture_cls, detector: AnyPresenceDetector, label: str) -> bool:
-    """Shared by toggle_ats_on()/click_teleport_icon(): press F2, locate
-    one icon fresh, double-click it if present."""
-    if not ensure_skill_tab(link):
-        print(f"    [{label}] F2 keypress not ACKed")
-        return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    result: PresenceResult = detector.measure(frame)
-    if not result.present or result.region is None:
-        print(f"    [{label}] not present (score={result.match_score:.3f})")
-        return False
-    ok = double_click_region(link, converter, result.region)
-    print(f"    [{label}] double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    return ok
-
-
 def toggle_ats_on(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
                    window_title: str, screen_capture_cls) -> bool:
     """Ensures ATS ends up ON. ats_off/ats_on are a mutually-exclusive
@@ -223,8 +201,13 @@ def toggle_ats_on(link: SerialLink, settings: dict, project_root: Path, skill_pa
 
 def click_teleport_icon(link: SerialLink, settings: dict, project_root: Path, skill_panel: SkillPanelLocator,
                          window_title: str, screen_capture_cls) -> bool:
-    detector = build_teleport_detector(settings, project_root, skill_panel)
-    return _click_icon(link, settings, project_root, skill_panel, window_title, screen_capture_cls, detector, "teleport")
+    """Teleport through the F7 shortcut instead of locating/clicking its icon."""
+    ok, hold_ms = send_random_key_tap(link, "F7")
+    print(
+        f"    [teleport] F7 ({hold_ms}ms) -> "
+        f"{'ok' if ok else 'FAILED (missing ACK)'}"
+    )
+    return ok
 
 
 def press_heel_key(link: SerialLink) -> bool:
