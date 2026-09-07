@@ -11,7 +11,7 @@ from pc.action.action_sequence import ActionSequence, KeyStep, MouseClickStep, M
 _STEP_BUILDERS = {
     "KEY": lambda s: KeyStep(key=s["key"], hold_ms=s.get("hold_ms", 30)),
     "MOUSE_MOVE": lambda s: MouseMoveStep(x=s["x"], y=s["y"]),
-    "MOUSE_CLICK": lambda s: MouseClickStep(button=s["button"], hold_ms=s.get("hold_ms", 30)),
+    "MOUSE_CLICK": lambda s: MouseClickStep(button=s["button"], hold_ms=s.get("hold_ms")),
     "WAIT": lambda s: WaitStep(ms=s["ms"]),
 }
 

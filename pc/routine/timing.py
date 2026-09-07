@@ -8,6 +8,8 @@ import time
 DEFAULT_JITTER_SECONDS = 0.010
 SHORT_KEY_HOLD_MIN_MS = 50
 SHORT_KEY_HOLD_MAX_MS = 80
+MOUSE_CLICK_HOLD_MIN_MS = 30
+MOUSE_CLICK_HOLD_MAX_MS = 50
 
 
 def sleep_jittered(seconds: float, jitter_seconds: float = DEFAULT_JITTER_SECONDS) -> None:
@@ -20,6 +22,13 @@ def send_random_key_tap(link, key: str) -> tuple[bool, int]:
     """Send one ordinary key tap held for a random 50-80ms."""
     hold_ms = random.randint(SHORT_KEY_HOLD_MIN_MS, SHORT_KEY_HOLD_MAX_MS)
     ack = link.send_and_wait("KEY", f"{key} {hold_ms}")
+    return ack is not None and ack.ok, hold_ms
+
+
+def send_random_mouse_click(link, button: str = "LEFT") -> tuple[bool, int]:
+    """Send one mouse click held for a random 30-50ms."""
+    hold_ms = random.randint(MOUSE_CLICK_HOLD_MIN_MS, MOUSE_CLICK_HOLD_MAX_MS)
+    ack = link.send_and_wait("MOUSE_CLICK", f"{button} {hold_ms}")
     return ack is not None and ack.ok, hold_ms
 
 

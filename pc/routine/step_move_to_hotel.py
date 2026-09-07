@@ -56,7 +56,7 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
+from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing F2 before the tab swap has visibly
 # finished (icons re-render) -- generous but this step only runs
@@ -306,12 +306,12 @@ def double_click_region(link: SerialLink, converter: FrameToMouseConverter, regi
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
-    click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click1 is None or not click1.ok:
+    click1_ok, _ = send_random_mouse_click(link)
+    if not click1_ok:
         return False
     sleep_jittered(0.12)
-    click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click2 is None or not click2.ok:
+    click2_ok, _ = send_random_mouse_click(link)
+    if not click2_ok:
         return False
     sleep_jittered(0.1)
     park_cursor(link, converter)
@@ -406,8 +406,8 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter,
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
-    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click_ack is None or not click_ack.ok:
+    click_ok, _ = send_random_mouse_click(link)
+    if not click_ok:
         return False
     sleep_jittered(0.1)
     park_cursor(link, converter)

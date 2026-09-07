@@ -284,7 +284,7 @@ sequences:
   hp_low_example:
   - {type: MOUSE_MOVE, x: 0, y: 0}
   - {type: WAIT, ms: 30}
-  - {type: MOUSE_CLICK, button: LEFT, hold_ms: 30}
+  - {type: MOUSE_CLICK, button: LEFT}
   - {type: WAIT, ms: 50}
   - {type: KEY, key: F1, hold_ms: 30}
   - {type: WAIT, ms: 100}
@@ -340,7 +340,7 @@ step2:
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
 step3:
-  hp_exit_percent: 50.0
+  hp_exit_percent: 30.0
   gate_miss_click_x_ratio: 0.50
   gate_miss_click_y_ratio: 0.20
   # Random upper-screen click range around the ratios above. Defaults yield

@@ -41,7 +41,9 @@ def describe_step(step: dict[str, Any]) -> str:
     if kind == "MOUSE_MOVE":
         return f"x={step.get('x', 0)}, y={step.get('y', 0)}"
     if kind == "MOUSE_CLICK":
-        return f"{step.get('button', 'LEFT')} / 누름 {step.get('hold_ms', 30)}ms"
+        hold_ms = step.get("hold_ms")
+        timing = f"{hold_ms}ms" if hold_ms is not None else "30~50ms 랜덤"
+        return f"{step.get('button', 'LEFT')} / 누름 {timing}"
     if kind == "WAIT":
         return f"{step.get('ms', 100)}ms"
     return "알 수 없는 동작"
@@ -328,7 +330,7 @@ class MacroSettingsWindow(tk.Toplevel):
                 "마우스 클릭", "버튼(LEFT/RIGHT/MIDDLE)", initialvalue="LEFT", parent=self
             )
             if button and button.upper() in {"LEFT", "RIGHT", "MIDDLE"}:
-                step = {"type": "MOUSE_CLICK", "button": button.upper(), "hold_ms": 30}
+                step = {"type": "MOUSE_CLICK", "button": button.upper()}
             elif button:
                 messagebox.showerror("입력 오류", "LEFT, RIGHT, MIDDLE 중 하나를 입력하세요.", parent=self)
         elif kind == "WAIT":

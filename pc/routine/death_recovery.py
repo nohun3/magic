@@ -11,7 +11,7 @@ from pc.capture.screen_capture import Region
 from pc.capture.window_locator import locate_window_region
 from pc.detector.template_locator import locate_template
 from pc.routine.step_move_to_hotel import park_cursor
-from pc.routine.timing import sleep_jittered
+from pc.routine.timing import send_random_mouse_click, sleep_jittered
 from pc.serial.serial_link import SerialLink
 
 
@@ -73,8 +73,8 @@ class DeathRecoveryController:
         if move_ack is None or not move_ack.ok:
             raise DeathRecoveryRequested("icon_restart mouse move not ACKed")
         sleep_jittered(0.15)
-        click_ack = self._link.send_and_wait("MOUSE_CLICK", "LEFT")
-        if click_ack is None or not click_ack.ok:
+        click_ok, _ = send_random_mouse_click(self._link)
+        if not click_ok:
             raise DeathRecoveryRequested("icon_restart click not ACKed")
         print(
             f"[death] dialog_restart detected (score={dialog_match.score:.3f}); "
@@ -107,4 +107,3 @@ class DeathAwareScreenCapture:
 
     def __exit__(self, *exc):
         return self._capture.__exit__(*exc)
-

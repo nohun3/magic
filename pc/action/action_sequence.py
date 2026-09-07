@@ -26,6 +26,7 @@ advancing independently at its own pace.
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple, Union
@@ -46,7 +47,7 @@ class MouseMoveStep:
 @dataclass
 class MouseClickStep:
     button: str
-    hold_ms: int = 30
+    hold_ms: Optional[int] = None
 
 
 @dataclass
@@ -71,7 +72,8 @@ def step_to_command(step: Step) -> Optional[Tuple[str, str]]:
     if isinstance(step, MouseMoveStep):
         return "MOUSE_MOVE", f"{step.x} {step.y}"
     if isinstance(step, MouseClickStep):
-        return "MOUSE_CLICK", f"{step.button} {step.hold_ms}"
+        hold_ms = step.hold_ms if step.hold_ms is not None else random.randint(30, 50)
+        return "MOUSE_CLICK", f"{step.button} {hold_ms}"
     if isinstance(step, WaitStep):
         return None
     raise TypeError(f"Unknown step type: {type(step)!r}")

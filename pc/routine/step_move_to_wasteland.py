@@ -60,6 +60,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from pc.capture.screen_capture import Region  # noqa: E402
+from pc.detector.any_presence_detector import build_icon_detector  # noqa: E402
 from pc.detector.presence_detector import PresenceResult  # noqa: E402
 from pc.detector.skill_panel import SkillPanelLocator  # noqa: E402
 from pc.detector.window_content import ContentOffset, WindowContentLocator  # noqa: E402
@@ -69,8 +70,8 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import MatchResult, locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.step_move_to_hotel import click_chat_region, double_click_region, park_cursor, _capture_and_convert  # noqa: E402
-from pc.routine.timing import send_random_key_tap, sleep_jittered, sleep_transition_randomized  # noqa: E402
+from pc.routine.step_move_to_hotel import click_chat_region, double_click_region, ensure_skill_tab, park_cursor, _capture_and_convert  # noqa: E402
+from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing the teleport-scroll F10 shortcut before the
 # dialog has finished opening/rendering.
@@ -495,8 +496,8 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
-    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click_ack is None or not click_ack.ok:
+    click_ok, _ = send_random_mouse_click(link)
+    if not click_ok:
         return False
     sleep_jittered(0.1)
     park_cursor(link, converter)
@@ -518,8 +519,8 @@ def click_frame_ratio_once(link: SerialLink, converter: FrameToMouseConverter,
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
-    click_ack = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click_ack is None or not click_ack.ok:
+    click_ok, _ = send_random_mouse_click(link)
+    if not click_ok:
         return False
     sleep_jittered(0.1)
     park_cursor(link, converter)
@@ -537,12 +538,12 @@ def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
-    click1 = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click1 is None or not click1.ok:
+    click1_ok, _ = send_random_mouse_click(link)
+    if not click1_ok:
         return False
     sleep_jittered(0.12)
-    click2 = link.send_and_wait("MOUSE_CLICK", "LEFT")
-    if click2 is None or not click2.ok:
+    click2_ok, _ = send_random_mouse_click(link)
+    if not click2_ok:
         return False
     sleep_jittered(0.1)
     park_cursor(link, converter)
@@ -590,7 +591,7 @@ def _use_npc_teleporter_fallback(
     if npc_template is None:
         print("[stop] npc_teleporter template could not be loaded.")
         return False
-    npc_match = None
+    other_region = None
     converter = None
     for attempt in range(1, NPC_TELEPORTER_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
@@ -603,37 +604,40 @@ def _use_npc_teleporter_fallback(
                 f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
                 f"score={npc_match.score:.3f} region={npc_match.region}"
             )
-            break
-        best = locate_template(frame, npc_template, -1.0)
-        print(
-            f"  [fallback] npc_teleporter attempt "
-            f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: not found "
-            f"(best={best.score:.3f} at {best.region})"
-        )
+            clicked = click_region_once(
+                link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER
+            )
+            print(
+                f"  [fallback] npc_teleporter click "
+                f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
+                f"{'ok' if clicked else 'FAILED (missing ACK)'}"
+            )
+            if clicked:
+                sleep_jittered(DIALOG_OPEN_SETTLE_S)
+                frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+                other_region = other_region_text.find(frame)
+                print(
+                    "  [fallback] dialog verification "
+                    f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
+                    f"'다른 지역으로 가고 싶습니다.'={other_region}"
+                )
+                if other_region is not None:
+                    break
+                print("  [fallback] NPC dialog did not open -- finding and clicking npc_teleporter again")
+        else:
+            best = locate_template(frame, npc_template, -1.0)
+            print(
+                f"  [fallback] npc_teleporter attempt "
+                f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: not found "
+                f"(best={best.score:.3f} at {best.region})"
+            )
         if attempt < NPC_TELEPORTER_MAX_ATTEMPTS:
             sleep_jittered(NPC_TELEPORTER_RETRY_INTERVAL_S)
-    if npc_match is None or converter is None:
-        print("[stop] npc_teleporter not found after retries.")
-        return False
-    if not click_region_once(
-        link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER
-    ):
-        print("[stop] npc_teleporter click failed.")
-        return False
-
-    other_region = None
-    for attempt in range(1, FALLBACK_DIALOG_OCR_ATTEMPTS + 1):
-        sleep_jittered(DIALOG_OPEN_SETTLE_S)
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        other_region = other_region_text.find(frame)
-        print(
-            f"  [fallback] '다른 지역으로 가고 싶습니다.' OCR "
-            f"{attempt}/{FALLBACK_DIALOG_OCR_ATTEMPTS}: {other_region}"
-        )
-        if other_region is not None:
-            break
     if other_region is None or not click_region_once(link, converter, other_region):
-        print("[stop] '다른 지역으로 가고 싶습니다.' click failed.")
+        print(
+            "[stop] npc_teleporter dialog did not open after retries, or "
+            "'다른 지역으로 가고 싶습니다.' click failed."
+        )
         return False
 
     paid_wasteland = None
@@ -721,7 +725,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         link, settings, project_root, window_title, screen_capture_cls
     ):
         return False
-    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
+    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 30.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
@@ -736,25 +740,42 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         settings, project_root, reader
     )
 
-    print("[1/6] teleport_scroll: pressing F10 shortcut...")
-    shortcut_ok, hold_ms = send_random_key_tap(link, "F10")
-    print(
-        f"  F10 ({hold_ms}ms) -> "
-        f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
-    )
-    if not shortcut_ok:
+    print("[1/6] checking teleport_scroll possession...")
+    if not ensure_skill_tab(link):
         return False
-    print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
-    sleep_jittered(DIALOG_OPEN_SETTLE_S)
-
+    sleep_jittered(0.3)
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
-    if hp_f12 is not None:
-        return HP_RECOVERY_AFTER_F12 if hp_f12 else None
-    target = wasteland_text.find(frame)
-    print(f"[2/6] '* [오렌] 버땅' region: {target}")
-    if target is None:
-        print("  F10 dialog target not found -- using NPC teleporter fallback")
+    teleport_scroll = build_icon_detector(
+        settings["icons"]["teleport_scroll"], project_root, panel=skill_panel
+    ).measure(frame)
+    print(
+        f"  teleport_scroll: present={teleport_scroll.present} "
+        f"score={teleport_scroll.match_score:.3f}"
+    )
+
+    target = None
+    if teleport_scroll.present:
+        print("  teleport_scroll present -- pressing F10 shortcut...")
+        shortcut_ok, hold_ms = send_random_key_tap(link, "F10")
+        print(
+            f"  F10 ({hold_ms}ms) -> "
+            f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
+        )
+        if not shortcut_ok:
+            return False
+        print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
+        sleep_jittered(DIALOG_OPEN_SETTLE_S)
+
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+        if hp_f12 is not None:
+            return HP_RECOVERY_AFTER_F12 if hp_f12 else None
+        target = wasteland_text.find(frame)
+        print(f"[2/6] '* [오렌] 버땅' region: {target}")
+
+    if not teleport_scroll.present or target is None:
+        reason = "teleport_scroll not present" if not teleport_scroll.present else "F10 dialog target not found"
+        print(f"  {reason} -- using talking_scroll F11 fallback")
         if not _use_npc_teleporter_fallback(
             settings, project_root, window_title, link, skill_panel,
             screen_capture_cls, oren_teleporter_text, other_region_text,
