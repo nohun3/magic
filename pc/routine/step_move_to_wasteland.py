@@ -444,21 +444,28 @@ GATE_RETRY_INTERVAL_S = 0.5
 # pass their own jitter and are unaffected by this default.
 TEXT_CLICK_JITTER = 0.15
 SPRITE_CLICK_JITTER = 0.15
+HP_RECOVERY_AFTER_F12 = "hp_recovery_after_f12"
 
 
-def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: float) -> bool:
+def _step3_hp_is_critical(frame: np.ndarray, hp_detector, threshold_percent: float,
+                          link: SerialLink) -> Optional[bool]:
     if hp_detector is None:
-        return False
+        return None
     result = hp_detector.measure(frame)
     if result is None:
         print("  [3단계 HP] unreadable -- continuing this checkpoint")
-        return False
+        return None
     hp = result.reading
     print(f"  [3단계 HP] {hp.current}/{hp.maximum} ({hp.percent:.1f}%)")
     if hp.percent <= threshold_percent:
-        print(f"  [3단계 HP] <= {threshold_percent:.0f}% -- handoff to [2단계]")
-        return True
-    return False
+        ok, hold_ms = send_random_key_tap(link, "F12")
+        print(
+            f"  [3단계 HP] <= {threshold_percent:.0f}% -- "
+            f"F12 ({hold_ms}ms) -> {'ok' if ok else 'FAILED (missing ACK)'}; "
+            "handoff to [2단계]"
+        )
+        return ok
+    return None
 
 
 def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region: Region, jitter: float = TEXT_CLICK_JITTER) -> bool:
@@ -654,8 +661,9 @@ def _verify_wasteland_arrival(
         sleep_jittered(verify_interval_s)
         attempt += 1
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-            return None
+        hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+        if hp_f12 is not None:
+            return HP_RECOVERY_AFTER_F12 if hp_f12 else None
         location_result = measure_wasteland_location(
             location_content_locator, location_detector, frame
         )
@@ -722,8 +730,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-        return None
+    hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+    if hp_f12 is not None:
+        return HP_RECOVERY_AFTER_F12 if hp_f12 else None
     target = wasteland_text.find(frame)
     print(f"[2/6] '* [오렌] 버땅' region: {target}")
     if target is None:
@@ -747,8 +756,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     dest_target = None
     for attempt in range(1, GATE_CLICK_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-            return None
+        hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+        if hp_f12 is not None:
+            return HP_RECOVERY_AFTER_F12 if hp_f12 else None
         gate_match = locate_teleport_gate(settings, project_root, frame)
         if gate_match is None:
             # A previous gate click may already have opened the destination
@@ -838,8 +848,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
             frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-            if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-                return None
+            hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+            if hp_f12 is not None:
+                return HP_RECOVERY_AFTER_F12 if hp_f12 else None
             dest_target = gate_dest_text.find(frame)
             if dest_target is not None:
                 print(f"    destination dialog found: {dest_target}")
@@ -864,8 +875,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
 
     print("[5/6] finding '발을 내딛는다' text...")
     frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    if _step3_hp_is_critical(frame, hp_detector, hp_exit_percent):
-        return None
+    hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+    if hp_f12 is not None:
+        return HP_RECOVERY_AFTER_F12 if hp_f12 else None
     forward_target = step_forward_text.find(frame)
     print(f"  target region: {forward_target}")
     if forward_target is None:

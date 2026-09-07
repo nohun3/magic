@@ -339,13 +339,16 @@ def _run_once() -> float:
                     wasteland_text, gate_dest_text, step_forward_text, korean_reader,
                     routine_capture_cls, hp_detector=hp_detector,
                 )
-                if step3_result is None:
+                if step3_result is None or step3_result == step3.HP_RECOVERY_AFTER_F12:
                     print("[3단계] recovery requested -> running [2단계]")
                     ok = step4.ensure_step2(
                         settings, project_root, window_title, link, skill_panel,
                         hp_detector, mp_detector, hotel_text, rent_room_text,
                         ok_button_text, routine_capture_cls, korean_reader,
                         force_run=True,
+                        skip_hotel_teleport_once=(
+                            step3_result == step3.HP_RECOVERY_AFTER_F12
+                        ),
                     )
                     if not ok:
                         print(f"[stop] cycle {cycle}: emergency [2단계] failed.")

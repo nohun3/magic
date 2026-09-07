@@ -441,7 +441,8 @@ def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_ca
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
                   hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
                   screen_capture_cls, korean_reader: KoreanTextReader,
-                  force_run: bool = False) -> bool:
+                  force_run: bool = False,
+                  skip_hotel_teleport_once: bool = False) -> bool:
     """Runs [2단계], first running [1단계] if icon_hotel_key isn't
     present in roi_skill (the 4-hour room rental can expire mid-loop, so
     this precondition is re-checked every time, not just once at
@@ -482,7 +483,9 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
         ok = step2.run(
             settings, project_root, window_title, link, skill_panel, mp_detector,
             screen_capture_cls, korean_reader,
+            skip_hotel_teleport=skip_hotel_teleport_once,
         )
+        skip_hotel_teleport_once = False
         if not ok:
             print("  [2단계] failed.")
             return False

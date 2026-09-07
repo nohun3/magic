@@ -620,7 +620,8 @@ def _capture_and_convert(window_title: str, screen_capture_cls):
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls,
-        korean_reader: KoreanTextReader) -> bool:
+        korean_reader: KoreanTextReader,
+        skip_hotel_teleport: bool = False) -> bool:
     """Full step: verify hotel_key and press F12 (teleport to room), then
     meditation F8 shortcut (start recovering), then verify the
     meditation buff actually came up and retry once if not (see module
@@ -636,25 +637,28 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     event_restarts = 0
     while True:
         # -- sub-action 1: hotel_key --
-        if not ensure_skill_tab(link):
-            return False
-        frame, _ = _capture_and_convert(window_title, screen_capture_cls)
-        hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
-        if not hotel_key.present or hotel_key.region is None:
-            print("  hotel_key not present -- cannot use F12")
-            return False
-        key_ok, hold_ms = send_random_key_tap(link, "F12")
-        print(
-            f"  hotel_key F12 ({hold_ms}ms) -> "
-            f"{'ok' if key_ok else 'FAILED (missing ACK)'}"
-        )
-        if not key_ok:
-            return False
-
-        if not press_escape_keys(link):
-            return False
-
-        sleep_jittered(TELEPORT_SETTLE_S)
+        if skip_hotel_teleport:
+            print("  hotel F12 already sent by [3단계] HP recovery -- skipping duplicate")
+            skip_hotel_teleport = False
+            sleep_jittered(TELEPORT_SETTLE_S)
+        else:
+            if not ensure_skill_tab(link):
+                return False
+            frame, _ = _capture_and_convert(window_title, screen_capture_cls)
+            hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
+            if not hotel_key.present or hotel_key.region is None:
+                print("  hotel_key not present -- cannot use F12")
+                return False
+            key_ok, hold_ms = send_random_key_tap(link, "F12")
+            print(
+                f"  hotel_key F12 ({hold_ms}ms) -> "
+                f"{'ok' if key_ok else 'FAILED (missing ACK)'}"
+            )
+            if not key_ok:
+                return False
+            if not press_escape_keys(link):
+                return False
+            sleep_jittered(TELEPORT_SETTLE_S)
 
         event_result = _handle_event_if_present(
             settings, project_root, window_title, link, skill_panel,
