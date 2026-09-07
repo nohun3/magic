@@ -8,16 +8,15 @@ involved):
    rented hotel room. Followed by pressing ESC 3-5 times (per the
    user's request) to clear out whatever transient dialog/prompt the
    teleport itself might have left open.
-2. `icons.meditation` -- double-clicked right after arriving, to start
-   recovering.
+2. F8 meditation shortcut -- pressed right after arriving, to start recovering.
 
-The meditation double-click can silently fail to actually cast if MP is
+The meditation F8 shortcut can silently fail to actually cast if MP is
 too low right after a hunt (per the user, meditation requires MP >= 10
 to cast at all) -- [2단계] always runs right after [4단계] exits at
 MP <= 5%, so this is a real, not theoretical, case. After clicking, `run()` checks
 `buffs.meditation` in `roi_buff` to confirm the buff actually came up;
 if not, it waits for MP to passively regen back up to
-MEDITATION_RETRY_MIN_MP and clicks icon_meditation once more -- then
+MEDITATION_RETRY_MIN_MP and presses F8 once more -- then
 checks the buff a *second* time. Confirmed live that this second check
 matters: the retry click can ACK fine (the Arduino did physically
 click) without the buff actually coming up in-game, so trusting the ACK
@@ -103,10 +102,6 @@ ESC_PRESSES_MAX = 5
 
 def build_hotel_key_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["icons"]["hotel_key"], project_root, panel=skill_panel)
-
-
-def build_meditation_icon_detector(settings: dict, project_root: Path, skill_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["icons"]["meditation"], project_root, panel=skill_panel)
 
 
 def build_meditation_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -355,10 +350,6 @@ def press_escape_keys(link: SerialLink) -> bool:
     return True
 
 
-def locate_meditation_icon(settings: dict, project_root: Path, frame: np.ndarray, skill_panel: SkillPanelLocator) -> PresenceResult:
-    return build_meditation_icon_detector(settings, project_root, skill_panel).measure(frame)
-
-
 def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_capture_cls, poll_interval_s: float = MP_POLL_INTERVAL_S) -> None:
     print(f"    MP >= {min_mp} 대기 중 (meditation 재시전용)...")
     while True:
@@ -375,10 +366,10 @@ def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_ca
 
 def _verify_and_retry_meditation(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
                                   mp_detector, window_title: str, screen_capture_cls) -> bool:
-    """Confirms the meditation double-click actually activated the buff
+    """Confirms the meditation F8 shortcut actually activated the buff
     (checks `buffs.meditation` in roi_buff); if not, waits for MP to
-    passively regen to MEDITATION_RETRY_MIN_MP and clicks
-    icon_meditation once more. See module docstring for why this exists
+    passively regen to MEDITATION_RETRY_MIN_MP and presses F8 once more.
+    See module docstring for why this exists
     -- the cast can silently fail when MP is very low, which is exactly
     the state [2단계] always starts in right after [4단계]."""
     buff_panel = build_buff_panel(settings, project_root)
@@ -390,19 +381,14 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
         print("  meditation buff active -- ok")
         return True
 
-    print(f"  meditation buff not active after double-click (score={buff_result.match_score:.3f}) -- likely too little MP to cast")
+    print(f"  meditation buff not active after F8 (score={buff_result.match_score:.3f}) -- likely too little MP to cast")
     _wait_for_mp_at_least(mp_detector, MEDITATION_RETRY_MIN_MP, window_title, screen_capture_cls)
 
-    if not ensure_skill_tab(link):
-        print("  [retry] F2 keypress not ACKed")
-        return False
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
-    if not meditation.present or meditation.region is None:
-        print("  [retry] meditation icon not present")
-        return False
-    ok = double_click_region(link, converter, meditation.region)
-    print(f"  [retry] meditation double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
+    ok, hold_ms = send_random_key_tap(link, "F8")
+    print(
+        f"  [retry] meditation F8 ({hold_ms}ms) -> "
+        f"{'ok' if ok else 'FAILED (missing ACK)'}"
+    )
     if not ok:
         return False
 
@@ -617,7 +603,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls,
         korean_reader: KoreanTextReader) -> bool:
     """Full step: hotel_key double-click (teleport to room), then
-    meditation double-click (start recovering), then verify the
+    meditation F8 shortcut (start recovering), then verify the
     meditation buff actually came up and retry once if not (see module
     docstring). Returns False as soon as any sub-action fails to find
     its icon or ACK."""
@@ -666,22 +652,20 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     )
     meditation_buff = is_meditation_buff_active(settings, project_root, frame)
     if meditation_buff.present:
-        print("  meditation buff already active -- skipping icon_meditation double-click")
+        print("  meditation buff already active -- skipping F8")
     else:
-        if not ensure_skill_tab(link):
-            print("  [warn] meditation F2 tab switch failed -- continuing without meditation")
-        else:
-            frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-            meditation = locate_meditation_icon(settings, project_root, frame, skill_panel)
-            if not meditation.present or meditation.region is None:
-                print("  [warn] meditation icon not present -- continuing without meditation")
-            elif not double_click_region(link, converter, meditation.region):
-                print("  [warn] meditation double-click was not ACKed -- continuing without meditation")
-            elif not _verify_and_retry_meditation(
-                settings, project_root, link, skill_panel, mp_detector,
-                window_title, screen_capture_cls,
-            ):
-                print("  [warn] meditation buff could not be confirmed -- continuing without meditation")
+        meditation_ok, hold_ms = send_random_key_tap(link, "F8")
+        print(
+            f"  meditation F8 ({hold_ms}ms) -> "
+            f"{'ok' if meditation_ok else 'FAILED (missing ACK)'}"
+        )
+        if not meditation_ok:
+            print("  [warn] meditation F8 was not ACKed -- continuing without meditation")
+        elif not _verify_and_retry_meditation(
+            settings, project_root, link, skill_panel, mp_detector,
+            window_title, screen_capture_cls,
+        ):
+            print("  [warn] meditation buff could not be confirmed -- continuing without meditation")
 
     # Mana belongs to the beginning of Step 2: check/activate it directly
     # after the meditation action, before the HP/MP readiness wait.
