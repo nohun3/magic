@@ -1,13 +1,10 @@
 """[2단계] 여관 이동.
 
-Two sub-actions, both plain quick-slot icon double-clicks (no dialog
-involved):
+Two sub-actions, both without dialog interaction:
 
-1. `icons.hotel_key` -- a return-to-room item bound to a quick-slot
-   icon; double-clicking it teleports the character straight to the
-   rented hotel room. Followed by pressing ESC 3-5 times (per the
-   user's request) to clear out whatever transient dialog/prompt the
-   teleport itself might have left open.
+1. Confirm `icons.hotel_key` is present, then press its F12 shortcut once
+   to teleport straight to the rented hotel room. Followed by pressing
+   ESC 3-5 times (per the user's request) to clear transient prompts.
 2. F8 meditation shortcut -- pressed right after arriving, to start recovering.
 
 The meditation F8 shortcut can silently fail to actually cast if MP is
@@ -24,10 +21,8 @@ alone was reporting false successes. A missing buff after that retry is
 logged as a warning but does not fail [2단계]; the caller continues to
 wait for the configured HP/MP readiness condition.
 
-Both icons live on the F2 quick-slot tab that `roi_skill`'s templates
-were captured against -- the skill bar has multiple tabs (F1/F2/F3), so
-F2 is (re-)pressed before each of the two detections rather than once
-up front, in case the teleport itself resets the selected tab.
+The hotel-key presence check still uses the F2 quick-slot tab and
+`roi_skill`; only the action after successful detection uses F12.
 
 Precondition for sub-action 1 (checked by the caller, not here):
 `icons.hotel_key` must already be present -- if it isn't, a room/key
@@ -68,7 +63,7 @@ from pc.routine.timing import send_random_key_tap, sleep_jittered  # noqa: E402
 # occasionally, not per-frame, so it doesn't need to be tight.
 TAB_SWITCH_SETTLE_S = 0.3
 
-# How long to wait after the hotel_key double-click before the teleport
+# How long to wait after the hotel-key F12 shortcut before the teleport
 # fade/load has finished and it's safe to recapture -- longer than a
 # dialog opening (that's near-instant); a full scene teleport isn't.
 TELEPORT_SETTLE_S = 1.5
@@ -93,7 +88,7 @@ EVENT_MERCHANT_NEEDLES = ("기란", "잡화", "상인")
 _cursor_park_region: Region | None = None
 
 
-# After the hotel_key double-click, press ESC this many times (picked
+# After the hotel-key F12 shortcut, press ESC this many times (picked
 # fresh each call) -- per the user's request, to clear out whatever
 # transient dialog/prompt the teleport itself might have left open.
 ESC_PRESSES_MIN = 3
@@ -626,7 +621,7 @@ def _capture_and_convert(window_title: str, screen_capture_cls):
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         skill_panel: SkillPanelLocator, mp_detector, screen_capture_cls,
         korean_reader: KoreanTextReader) -> bool:
-    """Full step: hotel_key double-click (teleport to room), then
+    """Full step: verify hotel_key and press F12 (teleport to room), then
     meditation F8 shortcut (start recovering), then verify the
     meditation buff actually came up and retry once if not (see module
     docstring). Returns False as soon as any sub-action fails to find
@@ -643,11 +638,17 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         # -- sub-action 1: hotel_key --
         if not ensure_skill_tab(link):
             return False
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        frame, _ = _capture_and_convert(window_title, screen_capture_cls)
         hotel_key = locate_hotel_key(settings, project_root, frame, skill_panel)
         if not hotel_key.present or hotel_key.region is None:
+            print("  hotel_key not present -- cannot use F12")
             return False
-        if not double_click_region(link, converter, hotel_key.region):
+        key_ok, hold_ms = send_random_key_tap(link, "F12")
+        print(
+            f"  hotel_key F12 ({hold_ms}ms) -> "
+            f"{'ok' if key_ok else 'FAILED (missing ACK)'}"
+        )
+        if not key_ok:
             return False
 
         if not press_escape_keys(link):
