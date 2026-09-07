@@ -438,6 +438,44 @@ def _wait_for_ready_hp_mp(hp_detector, mp_detector, window_title: str, screen_ca
         print(f"  [2단계 시간] 총 대기시간: {elapsed:.1f}초")
 
 
+def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
+                     link: SerialLink, skill_panel: SkillPanelLocator,
+                     hotel_text, rent_room_text, ok_button_text,
+                     screen_capture_cls) -> bool:
+    """Ensure the hotel key exists, running Step 1 once when absent."""
+    import pc.routine.step_buy_hotel_key as step1
+
+    for check_attempt in range(1, 3):
+        if not step1.ensure_visible_skill_tab(
+            link, skill_panel, window_title, screen_capture_cls
+        ):
+            print("  [hotel key] skill panel unavailable")
+            return False
+        with screen_capture_cls(window_title=window_title) as cap:
+            frame = cap.grab()
+        hotel_key = build_icon_detector(
+            settings["icons"]["hotel_key"], project_root, panel=skill_panel
+        ).measure(frame)
+        print(
+            f"  [hotel key] check {check_attempt}: "
+            f"present={hotel_key.present} score={hotel_key.match_score:.3f}"
+        )
+        if hotel_key.present:
+            return True
+        if check_attempt == 2:
+            print("  [hotel key] still absent after [1단계]")
+            return False
+
+        print("  hotel_key not present -- running [1단계] first...")
+        if not step1.run(
+            settings, project_root, window_title, link, skill_panel,
+            hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
+        ):
+            print("  [1단계] failed.")
+            return False
+    return False
+
+
 def ensure_step2(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
                   hp_detector, mp_detector, hotel_text, rent_room_text, ok_button_text,
                   screen_capture_cls, korean_reader: KoreanTextReader,
@@ -453,32 +491,17 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     pc/routine/run_all.py's initial entry point, so both go through
     the exact same "ensure the precondition, run [2단계], wait for full
     MP" sequence the user specified."""
-    import pc.routine.step_buy_hotel_key as step1
     import pc.routine.step_move_to_hotel as step2
     mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
 
     while True:
         # The hotel key is a persistent precondition for every [2단계]
         # entry, independent of current MP.
-        if not step1.ensure_visible_skill_tab(
-            link, skill_panel, window_title, screen_capture_cls
+        if not ensure_hotel_key(
+            settings, project_root, window_title, link, skill_panel,
+            hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
         ):
-            print("  [2단계] skill panel unavailable -- cannot check hotel_key")
             return False
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        hotel_key = build_icon_detector(
-            settings["icons"]["hotel_key"], project_root, panel=skill_panel
-        ).measure(frame)
-        if not hotel_key.present:
-            print("  hotel_key not present -- running [1단계] first...")
-            ok = step1.run(
-                settings, project_root, window_title, link, skill_panel,
-                hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
-            )
-            if not ok:
-                print("  [1단계] failed.")
-                return False
 
         ok = step2.run(
             settings, project_root, window_title, link, skill_panel, mp_detector,

@@ -333,6 +333,14 @@ def _run_once() -> float:
                     skip_dungeon_check_once = True
                     cycle -= 1
                     continue
+                print("[pre-step3] checking hotel_key precondition...")
+                if not step4.ensure_hotel_key(
+                    settings, project_root, window_title, link, skill_panel,
+                    hotel_text, rent_room_text, ok_button_text,
+                    routine_capture_cls,
+                ):
+                    print(f"[stop] 사이클 {cycle}: pre-step3 hotel_key check failed.")
+                    return restart_delay_s
                 print(f"\n===== 사이클 {cycle}: [3단계] 버려진땅 이동 =====")
                 step3_result = step3.run(
                     settings, project_root, window_title, link, skill_panel,
