@@ -21,7 +21,8 @@ roi_skill에 없으면(아직 방을 안 구했으면) 먼저 이 스텝을 실�
 dialog(대화창 목록 / NPC 대화 / 확인 프롬프트)라서, RememberedDialogText도
 텍스트별로 별개 인스턴스를 하나씩 둔다(캐시를 공유하면 안 됨) -- OCR은 각각
 최초 1회만 돌고, 그 뒤로는 dialog anchor(OCR 아닌, 싼 템플릿 매칭)만 다시 맞춰서
-기억해둔 위치를 클릭한다. pc/detector/remembered_text.py 참고.
+기억해둔 위치를 클릭한다. 단, 4번 대여 문구는 NPC 클릭 성공 확인을 위해
+매번 OCR로 검증한다. pc/detector/remembered_text.py 참고.
 
 2번("[오렌] 여관")과 4번("방을 대여한다")은 노란색 텍스트라서 OCR 전에
 pc/detector/color_mask.py의 mask_non_yellow()로 노란색만 남기고 마스킹한다 --
@@ -133,6 +134,7 @@ def build_rent_room_text_locator(settings: dict, project_root: Path, reader: Kor
         reader,
         _select_rent_room,
         preprocess=mask_non_yellow,
+        cache=False,  # Verify the actual NPC menu after every sprite click.
     )
 
 
@@ -224,40 +226,47 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     print(f"Waited {teleport_wait_s:.2f}s for teleport.")
 
     print("[3/5] finding npc_hotel_manager...")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    npc_match = locate_hotel_manager(settings, project_root, frame)
-    if npc_match is None:
-        npc_cfg = settings["npcs"]["hotel_manager"]
-        template = cv2.imread(str(project_root / npc_cfg["template"]))
-        best = locate_template(frame, template, 0.0)
-        print(f"  [stop] no match >= threshold (best score below threshold: {best.score:.3f} @ {best.region})")
+    npc_cfg = settings["npcs"]["hotel_manager"]
+    template = cv2.imread(str(project_root / npc_cfg["template"]))
+    if template is None:
+        print("[stop] npc_hotel_manager template could not be loaded")
         return False
-    print(f"  hotel_manager: region={npc_match.region} score={npc_match.score:.3f}")
-    ok = click_region_once(link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER)
-    print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
-    if not ok:
-        return False
-
-    print(f"Waiting {DIALOG_STEP_SETTLE_S}s for NPC dialogue...")
-    sleep_jittered(DIALOG_STEP_SETTLE_S)
-
-    print("[4/5] finding '방을 대여한다' text...")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    rent_target = rent_room_text.find(frame)
-    print(f"  target region: {rent_target}")
-    if rent_target is None:
-        # Confirmed live: the NPC dialogue can still be rendering at this
-        # point (click landed fine, score 0.990, but the dialogue text
-        # wasn't up yet) -- one extra wait-and-retry before giving up,
-        # rather than failing on what's just slow rendering.
-        print(f"  not found -- retrying once after another {DIALOG_STEP_SETTLE_S}s...")
-        sleep_jittered(DIALOG_STEP_SETTLE_S)
+    max_attempts = max(1, int(npc_cfg.get("click_max_attempts", 5)))
+    rent_target = None
+    for attempt in range(1, max_attempts + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        rent_target = rent_room_text.find(frame)
-        print(f"  target region (retry): {rent_target}")
+        npc_match = locate_template(frame, template, npc_cfg.get("match_threshold", 0.85))
+        if npc_match is None:
+            best = locate_template(frame, template, -1.0)
+            print(
+                f"  hotel_manager {attempt}/{max_attempts}: not found "
+                f"(best score={best.score:.3f} @ {best.region})"
+            )
+        else:
+            print(
+                f"  hotel_manager {attempt}/{max_attempts}: "
+                f"region={npc_match.region} score={npc_match.score:.3f}"
+            )
+            if not click_region_once(link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER):
+                print("[stop] hotel_manager click FAILED (missing ACK)")
+                return False
+            # Allow slow rendering before trying another NPC click.
+            for check in range(1, 3):
+                sleep_jittered(DIALOG_STEP_SETTLE_S)
+                frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+                rent_target = rent_room_text.find(frame)
+                print(f"  rental dialog verification {check}/2: {rent_target}")
+                if rent_target is not None:
+                    break
+            if rent_target is not None:
+                break
+            print("  rental dialog not detected -- finding and clicking hotel_manager again")
+        if attempt < max_attempts:
+            sleep_jittered(DIALOG_STEP_SETTLE_S)
     if rent_target is None:
-        print("[stop] '방을'+'대여한다' text not found -- is NPC dialogue open?")
+        print(f"[stop] hotel_manager rental dialog not detected after {max_attempts} attempts")
         return False
+    print("[4/5] clicking verified '방을 대여한다' text...")
     ok = click_region_once(link, converter, rent_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:

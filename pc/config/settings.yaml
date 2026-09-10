@@ -219,6 +219,7 @@ npcs:
     match_threshold: 0.85
   hotel_manager:
     template: templates/npc_hotel_manager.png
+    click_max_attempts: 5
     # Measured 0.907-1.0 across several independent live frames (same
     # window, different camera/dialog states) during [1단계] development.
     match_threshold: 0.85
