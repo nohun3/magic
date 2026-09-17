@@ -416,6 +416,32 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
     )
 
 
+def _locate_template_excluding(frame: np.ndarray, template: np.ndarray,
+                               threshold: float,
+                               excluded_regions: List[Region],
+                               exclusion_radius_px: int) -> Optional[MatchResult]:
+    """Find the best match while suppressing NPC locations that failed."""
+    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+    radius = max(0, int(exclusion_radius_px))
+    result_height, result_width = result.shape[:2]
+    for region in excluded_regions:
+        left = max(0, region.left - radius)
+        top = max(0, region.top - radius)
+        right = min(result_width, region.left + radius + 1)
+        bottom = min(result_height, region.top + radius + 1)
+        result[top:bottom, left:right] = -1.0
+    _, score, _, location = cv2.minMaxLoc(result)
+    if score < threshold:
+        return None
+    return MatchResult(
+        region=Region(
+            left=location[0], top=location[1],
+            width=template.shape[1], height=template.shape[0],
+        ),
+        score=float(score),
+    )
+
+
 def _visible_gate_template(template: np.ndarray, region: Region,
                            frame_width: int, frame_height: int) -> np.ndarray:
     """Return the template slice represented by a full/edge-clipped match."""
@@ -715,11 +741,16 @@ def _use_npc_teleporter_fallback(
     dialog_poll_interval_s = float(
         npc_cfg.get("dialog_poll_interval_seconds", 0.10)
     )
+    failed_location_radius_px = int(
+        npc_cfg.get("failed_location_exclusion_radius_px", 60)
+    )
     previous_weak_match = None
+    failed_npc_regions: List[Region] = []
     for attempt in range(1, NPC_TELEPORTER_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        npc_match = locate_template(
-            frame, npc_template, npc_cfg.get("match_threshold", 0.85)
+        npc_match = _locate_template_excluding(
+            frame, npc_template, float(npc_cfg.get("match_threshold", 0.85)),
+            failed_npc_regions, failed_location_radius_px,
         )
         if npc_match is not None:
             weak_confirmed = False
@@ -784,6 +815,11 @@ def _use_npc_teleporter_fallback(
                 if other_region is not None:
                     break
                 print("  [fallback] NPC dialog did not open -- finding and clicking npc_teleporter again")
+                failed_npc_regions.append(npc_match.region)
+                print(
+                    f"  [fallback] excluding failed NPC location "
+                    f"{npc_match.region} (radius={failed_location_radius_px}px)"
+                )
                 previous_weak_match = None
         else:
             previous_weak_match = None
@@ -892,35 +928,20 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
     gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
-    fallback_left_click_x_ratio = float(settings.get("step3", {}).get("fallback_left_click_x_ratio", 0.15))
-    fallback_left_click_y_ratio = float(settings.get("step3", {}).get("fallback_left_click_y_ratio", 0.50))
-    fallback_left_click_x_jitter = float(settings.get("step3", {}).get("fallback_left_click_x_jitter", 0.05))
-    fallback_left_click_y_jitter = float(settings.get("step3", {}).get("fallback_left_click_y_jitter", 0.15))
-    fallback_left_click_pending = False
 
     def click_gate_reposition(converter: FrameToMouseConverter) -> bool:
-        """Use one left-side click after F11, then the normal upper click."""
-        nonlocal fallback_left_click_pending
-        if fallback_left_click_pending:
-            x_ratio = fallback_left_click_x_ratio
-            y_ratio = fallback_left_click_y_ratio
-            x_jitter = fallback_left_click_x_jitter
-            y_jitter = fallback_left_click_y_jitter
-            label = "F11 first left-side"
-            fallback_left_click_pending = False
-        else:
-            x_ratio = gate_miss_click_x_ratio
-            y_ratio = gate_miss_click_y_ratio
-            x_jitter = gate_miss_click_x_jitter
-            y_jitter = gate_miss_click_y_jitter
-            label = "upper-center"
+        """Click the configured upper game-field reposition range."""
         clicked = click_frame_ratio_once(
-            link, converter, x_ratio, y_ratio, x_jitter, y_jitter,
+            link, converter,
+            gate_miss_click_x_ratio, gate_miss_click_y_ratio,
+            gate_miss_click_x_jitter, gate_miss_click_y_jitter,
         )
         print(
-            f"    {label} click "
-            f"(x={x_ratio - x_jitter:.2f}~{x_ratio + x_jitter:.2f}, "
-            f"y={y_ratio - y_jitter:.2f}~{y_ratio + y_jitter:.2f}) "
+            f"    upper-center click "
+            f"(x={gate_miss_click_x_ratio - gate_miss_click_x_jitter:.2f}~"
+            f"{gate_miss_click_x_ratio + gate_miss_click_x_jitter:.2f}, "
+            f"y={gate_miss_click_y_ratio - gate_miss_click_y_jitter:.2f}~"
+            f"{gate_miss_click_y_ratio + gate_miss_click_y_jitter:.2f}) "
             f"-> {'ok' if clicked else 'FAILED (missing ACK)'}"
         )
         return clicked
@@ -976,7 +997,6 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             paid_wasteland_text,
         ):
             return False
-        fallback_left_click_pending = True
     else:
         ok = double_click_text_center(link, converter, target)
         print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")

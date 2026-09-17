@@ -224,6 +224,9 @@ npcs:
     dialog_initial_delay_seconds: 0.10
     dialog_open_timeout_seconds: 0.60
     dialog_poll_interval_seconds: 0.10
+    # If clicking a candidate does not open the expected dialog, suppress that
+    # location for the rest of this Step 3 run and try the next-best NPC.
+    failed_location_exclusion_radius_px: 60
   event:
     template: templates/npc_event.png
     match_threshold: 0.85
@@ -375,12 +378,6 @@ step3:
   # x=35~65% and y=15~25% of the game frame.
   gate_miss_click_x_jitter: 0.15
   gate_miss_click_y_jitter: 0.05
-  # If the F11/NPC fallback route was used, replace only the first normal
-  # upper-screen reposition click with a click in the left side of the field.
-  fallback_left_click_x_ratio: 0.15
-  fallback_left_click_y_ratio: 0.50
-  fallback_left_click_x_jitter: 0.05
-  fallback_left_click_y_jitter: 0.15
 
 # Failed steps restart from the Step 2 entry precondition instead of terminating.
 routine:
