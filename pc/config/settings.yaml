@@ -214,6 +214,16 @@ npcs:
     # Live candidate stayed at the same true location across five frames
     # while scoring 0.448-0.455, so 0.85 rejected a stable real match.
     match_threshold: 0.40
+    # High-confidence matches are clicked immediately. A lower score must
+    # remain at nearly the same position in two frames; this avoids spending
+    # a full dialog timeout on transient false matches during map rendering.
+    strong_match_threshold: 0.60
+    weak_confirm_interval_seconds: 0.20
+    weak_confirm_distance_px: 20
+    # Poll after an NPC click instead of always sleeping 0.6 seconds.
+    dialog_initial_delay_seconds: 0.10
+    dialog_open_timeout_seconds: 0.60
+    dialog_poll_interval_seconds: 0.10
   event:
     template: templates/npc_event.png
     match_threshold: 0.85
@@ -345,6 +355,11 @@ dialog:
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
   mp_ready_percent: 97.0
+  # F8 can succeed before its buff icon is rendered. Wait, then require all
+  # configured checks to miss before sending the one allowed retry.
+  meditation_buff_settle_seconds: 0.8
+  meditation_buff_verify_attempts: 3
+  meditation_buff_verify_interval_seconds: 0.4
   # When buff_event is absent before meditation, visit the Giran general
   # merchant, click npc_event, then restart Step 2. The routine GUI can
   # override this setting for the current run.
@@ -353,13 +368,19 @@ step2:
 # Safety handoff while moving to the hunting area. Step 3 is aborted
 # immediately and Step 2 is forced even if MP is already full.
 step3:
-  hp_exit_percent: 30.0
+  hp_exit_percent: 50.0
   gate_miss_click_x_ratio: 0.50
   gate_miss_click_y_ratio: 0.20
   # Random upper-screen click range around the ratios above. Defaults yield
   # x=35~65% and y=15~25% of the game frame.
   gate_miss_click_x_jitter: 0.15
   gate_miss_click_y_jitter: 0.05
+  # If the F11/NPC fallback route was used, replace only the first normal
+  # upper-screen reposition click with a click in the left side of the field.
+  fallback_left_click_x_ratio: 0.15
+  fallback_left_click_y_ratio: 0.50
+  fallback_left_click_x_jitter: 0.05
+  fallback_left_click_y_jitter: 0.15
 
 # Failed steps restart from the Step 2 entry precondition instead of terminating.
 routine:

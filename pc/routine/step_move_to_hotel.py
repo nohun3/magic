@@ -349,6 +349,42 @@ def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_ca
         sleep_jittered(poll_interval_s)
 
 
+def _wait_for_meditation_buff(settings: dict, project_root: Path, link: SerialLink,
+                              window_title: str, screen_capture_cls,
+                              phase: str) -> PresenceResult:
+    """Allow the buff UI to render and confirm meditation over several frames."""
+    step2_cfg = settings.get("step2", {})
+    settle_s = max(
+        0.0, float(step2_cfg.get("meditation_buff_settle_seconds", 0.8))
+    )
+    attempts = max(
+        1, int(step2_cfg.get("meditation_buff_verify_attempts", 3))
+    )
+    interval_s = max(
+        0.0, float(step2_cfg.get("meditation_buff_verify_interval_seconds", 0.4))
+    )
+
+    print(f"  [{phase}] waiting {settle_s:.2f}s for meditation buff rendering")
+    sleep_jittered(settle_s, jitter_seconds=0.0)
+    buff_panel = build_buff_panel(settings, project_root)
+    detector = build_meditation_buff_detector(settings, project_root, buff_panel)
+    last_result = PresenceResult(present=False, region=None, match_score=0.0)
+    for attempt in range(1, attempts + 1):
+        frame = _capture_for_buff_check(
+            settings, project_root, window_title, link, screen_capture_cls
+        )
+        last_result = detector.measure(frame)
+        print(
+            f"  [{phase}] meditation buff check {attempt}/{attempts}: "
+            f"present={last_result.present} score={last_result.match_score:.3f}"
+        )
+        if last_result.present:
+            return last_result
+        if attempt < attempts:
+            sleep_jittered(interval_s, jitter_seconds=0.0)
+    return last_result
+
+
 def _verify_and_retry_meditation(settings: dict, project_root: Path, link: SerialLink, skill_panel: SkillPanelLocator,
                                   mp_detector, window_title: str, screen_capture_cls) -> bool:
     """Confirms the meditation F8 shortcut actually activated the buff
@@ -357,16 +393,18 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     See module docstring for why this exists
     -- the cast can silently fail when MP is very low, which is exactly
     the state [2단계] always starts in right after [4단계]."""
-    buff_panel = build_buff_panel(settings, project_root)
-    frame = _capture_for_buff_check(
-        settings, project_root, window_title, link, screen_capture_cls
+    buff_result = _wait_for_meditation_buff(
+        settings, project_root, link, window_title, screen_capture_cls,
+        phase="initial",
     )
-    buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
     if buff_result.present:
         print("  meditation buff active -- ok")
         return True
 
-    print(f"  meditation buff not active after F8 (score={buff_result.match_score:.3f}) -- likely too little MP to cast")
+    print(
+        f"  meditation buff not active after delayed checks "
+        f"(score={buff_result.match_score:.3f}) -- retrying once"
+    )
     _wait_for_mp_at_least(mp_detector, MEDITATION_RETRY_MIN_MP, window_title, screen_capture_cls)
 
     ok, hold_ms = send_random_key_tap(link, "F8")
@@ -377,15 +415,12 @@ def _verify_and_retry_meditation(settings: dict, project_root: Path, link: Seria
     if not ok:
         return False
 
-    # An ACK only confirms the Arduino physically clicked -- not that
-    # the click actually landed on/activated the skill in-game (found
-    # live: the retry click ACKed fine but the buff still hadn't come
-    # up). Re-check the buff itself instead of trusting the ACK alone.
-    sleep_jittered(0.6)
-    frame = _capture_for_buff_check(
-        settings, project_root, window_title, link, screen_capture_cls
+    # An ACK only confirms that the Arduino emitted the key. Use the same
+    # delayed multi-frame verification after the retry as after the first F8.
+    retry_buff_result = _wait_for_meditation_buff(
+        settings, project_root, link, window_title, screen_capture_cls,
+        phase="retry",
     )
-    retry_buff_result = build_meditation_buff_detector(settings, project_root, buff_panel).measure(frame)
     if retry_buff_result.present:
         print("  [retry] meditation buff active -- ok")
         return True
