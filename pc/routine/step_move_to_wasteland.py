@@ -637,6 +637,23 @@ def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
     return True
 
 
+def _poll_dialog_text(window_title: str, screen_capture_cls,
+                      text_locator: RememberedDialogText,
+                      initial_delay_s: float, timeout_s: float,
+                      poll_interval_s: float) -> Tuple[Optional[Region], FrameToMouseConverter, float]:
+    """Poll dialog text and return as soon as the target is available."""
+    started_at = time.monotonic()
+    if initial_delay_s > 0:
+        sleep_jittered(initial_delay_s, jitter_seconds=0.0)
+    while True:
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        target = text_locator.find(frame)
+        elapsed = time.monotonic() - started_at
+        if target is not None or elapsed >= timeout_s:
+            return target, converter, elapsed
+        sleep_jittered(poll_interval_s, jitter_seconds=0.0)
+
+
 def _use_npc_teleporter_fallback(
     settings: dict,
     project_root: Path,
@@ -680,17 +697,67 @@ def _use_npc_teleporter_fallback(
         return False
     other_region = None
     converter = None
+    strong_threshold = float(
+        npc_cfg.get("strong_match_threshold", 0.60)
+    )
+    weak_confirm_interval_s = float(
+        npc_cfg.get("weak_confirm_interval_seconds", 0.20)
+    )
+    weak_confirm_distance_px = float(
+        npc_cfg.get("weak_confirm_distance_px", 20.0)
+    )
+    dialog_initial_delay_s = float(
+        npc_cfg.get("dialog_initial_delay_seconds", 0.10)
+    )
+    dialog_open_timeout_s = float(
+        npc_cfg.get("dialog_open_timeout_seconds", 0.60)
+    )
+    dialog_poll_interval_s = float(
+        npc_cfg.get("dialog_poll_interval_seconds", 0.10)
+    )
+    previous_weak_match = None
     for attempt in range(1, NPC_TELEPORTER_MAX_ATTEMPTS + 1):
         frame, converter = _capture_and_convert(window_title, screen_capture_cls)
         npc_match = locate_template(
             frame, npc_template, npc_cfg.get("match_threshold", 0.85)
         )
         if npc_match is not None:
+            weak_confirmed = False
+            if npc_match.score < strong_threshold and previous_weak_match is not None:
+                previous_center = (
+                    previous_weak_match.region.left + previous_weak_match.region.width / 2,
+                    previous_weak_match.region.top + previous_weak_match.region.height / 2,
+                )
+                current_center = (
+                    npc_match.region.left + npc_match.region.width / 2,
+                    npc_match.region.top + npc_match.region.height / 2,
+                )
+                weak_confirmed = (
+                    abs(previous_center[0] - current_center[0]) <= weak_confirm_distance_px
+                    and abs(previous_center[1] - current_center[1]) <= weak_confirm_distance_px
+                )
+
             print(
                 f"  [fallback] npc_teleporter found on attempt "
                 f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
                 f"score={npc_match.score:.3f} region={npc_match.region}"
             )
+            if npc_match.score < strong_threshold and not weak_confirmed:
+                print(
+                    "  [fallback] weak NPC match -- waiting for same-position "
+                    "confirmation instead of clicking"
+                )
+                previous_weak_match = npc_match
+                if attempt < NPC_TELEPORTER_MAX_ATTEMPTS:
+                    sleep_jittered(weak_confirm_interval_s, jitter_seconds=0.0)
+                continue
+
+            confidence_kind = (
+                "strong" if npc_match.score >= strong_threshold
+                else "stable weak"
+            )
+            print(f"  [fallback] {confidence_kind} NPC match accepted")
+            previous_weak_match = None
             clicked = click_region_once(
                 link, converter, npc_match.region, jitter=SPRITE_CLICK_JITTER
             )
@@ -700,9 +767,15 @@ def _use_npc_teleporter_fallback(
                 f"{'ok' if clicked else 'FAILED (missing ACK)'}"
             )
             if clicked:
-                sleep_jittered(DIALOG_OPEN_SETTLE_S)
-                frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-                other_region = other_region_text.find(frame)
+                other_region, converter, dialog_elapsed_s = _poll_dialog_text(
+                    window_title, screen_capture_cls, other_region_text,
+                    dialog_initial_delay_s, dialog_open_timeout_s,
+                    dialog_poll_interval_s,
+                )
+                print(
+                    f"  [fallback] adaptive dialog wait: "
+                    f"{dialog_elapsed_s:.2f}s"
+                )
                 print(
                     "  [fallback] dialog verification "
                     f"{attempt}/{NPC_TELEPORTER_MAX_ATTEMPTS}: "
@@ -711,7 +784,9 @@ def _use_npc_teleporter_fallback(
                 if other_region is not None:
                     break
                 print("  [fallback] NPC dialog did not open -- finding and clicking npc_teleporter again")
+                previous_weak_match = None
         else:
+            previous_weak_match = None
             best = locate_template(frame, npc_template, -1.0)
             print(
                 f"  [fallback] npc_teleporter attempt "
@@ -812,11 +887,43 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         link, settings, project_root, window_title, screen_capture_cls
     ):
         return False
-    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 30.0))
+    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
     gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
+    fallback_left_click_x_ratio = float(settings.get("step3", {}).get("fallback_left_click_x_ratio", 0.15))
+    fallback_left_click_y_ratio = float(settings.get("step3", {}).get("fallback_left_click_y_ratio", 0.50))
+    fallback_left_click_x_jitter = float(settings.get("step3", {}).get("fallback_left_click_x_jitter", 0.05))
+    fallback_left_click_y_jitter = float(settings.get("step3", {}).get("fallback_left_click_y_jitter", 0.15))
+    fallback_left_click_pending = False
+
+    def click_gate_reposition(converter: FrameToMouseConverter) -> bool:
+        """Use one left-side click after F11, then the normal upper click."""
+        nonlocal fallback_left_click_pending
+        if fallback_left_click_pending:
+            x_ratio = fallback_left_click_x_ratio
+            y_ratio = fallback_left_click_y_ratio
+            x_jitter = fallback_left_click_x_jitter
+            y_jitter = fallback_left_click_y_jitter
+            label = "F11 first left-side"
+            fallback_left_click_pending = False
+        else:
+            x_ratio = gate_miss_click_x_ratio
+            y_ratio = gate_miss_click_y_ratio
+            x_jitter = gate_miss_click_x_jitter
+            y_jitter = gate_miss_click_y_jitter
+            label = "upper-center"
+        clicked = click_frame_ratio_once(
+            link, converter, x_ratio, y_ratio, x_jitter, y_jitter,
+        )
+        print(
+            f"    {label} click "
+            f"(x={x_ratio - x_jitter:.2f}~{x_ratio + x_jitter:.2f}, "
+            f"y={y_ratio - y_jitter:.2f}~{y_ratio + y_jitter:.2f}) "
+            f"-> {'ok' if clicked else 'FAILED (missing ACK)'}"
+        )
+        return clicked
     other_region_text = build_other_region_text_locator(
         settings, project_root, reader
     )
@@ -869,6 +976,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             paid_wasteland_text,
         ):
             return False
+        fallback_left_click_pending = True
     else:
         ok = double_click_text_center(link, converter, target)
         print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
@@ -914,18 +1022,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 print(f"    saved gate-failure game frame: {failure_path}")
             else:
                 print("    [warn] failed to save gate-failure game frame")
-            clicked = click_frame_ratio_once(
-                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio,
-                gate_miss_click_x_jitter, gate_miss_click_y_jitter,
-            )
-            print(
-                f"    gate and destination dialog missing: clicked upper-center "
-                f"(x={gate_miss_click_x_ratio - gate_miss_click_x_jitter:.2f}~"
-                f"{gate_miss_click_x_ratio + gate_miss_click_x_jitter:.2f}, "
-                f"y={gate_miss_click_y_ratio - gate_miss_click_y_jitter:.2f}~"
-                f"{gate_miss_click_y_ratio + gate_miss_click_y_jitter:.2f}) "
-                f"-> {'ok' if clicked else 'FAILED (missing ACK)'}"
-            )
+            print("    gate and destination dialog missing: repositioning")
+            clicked = click_gate_reposition(converter)
             if not clicked:
                 return False
         else:
@@ -980,18 +1078,8 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             # the dialog so the fallback is independent of whether the dialog
             # subsequently appears, while avoiding a click on the rendered
             # dialog itself.
-            upper_clicked = click_frame_ratio_once(
-                link, converter, gate_miss_click_x_ratio, gate_miss_click_y_ratio,
-                gate_miss_click_x_jitter, gate_miss_click_y_jitter,
-            )
-            print(
-                f"    after gate click: clicked upper-center "
-                f"(x={gate_miss_click_x_ratio - gate_miss_click_x_jitter:.2f}~"
-                f"{gate_miss_click_x_ratio + gate_miss_click_x_jitter:.2f}, "
-                f"y={gate_miss_click_y_ratio - gate_miss_click_y_jitter:.2f}~"
-                f"{gate_miss_click_y_ratio + gate_miss_click_y_jitter:.2f}) "
-                f"-> {'ok' if upper_clicked else 'FAILED (missing ACK)'}"
-            )
+            print("    after gate click: repositioning")
+            upper_clicked = click_gate_reposition(converter)
             if not upper_clicked:
                 return False
 
