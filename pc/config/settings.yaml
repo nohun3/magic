@@ -217,7 +217,7 @@ npcs:
     # High-confidence matches are clicked immediately. A lower score must
     # remain at nearly the same position in two frames; this avoids spending
     # a full dialog timeout on transient false matches during map rendering.
-    strong_match_threshold: 0.60
+    strong_match_threshold: 0.45
     weak_confirm_interval_seconds: 0.20
     weak_confirm_distance_px: 20
     # Poll after an NPC click instead of always sleeping 0.6 seconds.

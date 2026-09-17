@@ -698,7 +698,7 @@ def _use_npc_teleporter_fallback(
     other_region = None
     converter = None
     strong_threshold = float(
-        npc_cfg.get("strong_match_threshold", 0.60)
+        npc_cfg.get("strong_match_threshold", 0.45)
     )
     weak_confirm_interval_s = float(
         npc_cfg.get("weak_confirm_interval_seconds", 0.20)
