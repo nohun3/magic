@@ -1,7 +1,7 @@
 """전체 통합 루프 (사용자가 재정의한 버전).
 
 [2단계] 진입 시도 (icon_hotel_key 없으면 [1단계]부터, 끝나면 자동 [2단계])
--> HP 100% / MP 97% 이상 대기 -> 무한 반복: [3단계] -> [4단계] (MP<=5% 시 내부적으로 다시
+-> HP 100% / MP 준비값(기본 94%) 이상 대기 -> 무한 반복: [3단계] -> [4단계] (MP<=5% 시 내부적으로 다시
 "[2단계] 진입 시도(hotel_key 확인 포함) -> HP/MP 준비 대기"까지 자동 실행) -> 다시
 [3단계] -> ...
 
@@ -274,7 +274,8 @@ def _run_once() -> float:
                 print("[startup] roi_chatting click failed -- restarting session")
                 return restart_delay_s
 
-            print("=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP 97% 이상 대기) ===")
+            mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 94.0))
+            print(f"=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP {mp_ready_percent:g}% 이상 대기) ===")
             ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                                      hotel_text, rent_room_text, ok_button_text,
                                      routine_capture_cls, korean_reader)
