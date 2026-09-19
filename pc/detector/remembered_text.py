@@ -39,8 +39,11 @@ preprocessing) next to being wrong.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from pc.capture.screen_capture import Region
@@ -105,7 +108,9 @@ def merge_boxes_by_row(lines: List[Tuple[str, Region]]) -> List[Tuple[str, Regio
 class RememberedDialogText:
     def __init__(self, content_locator: WindowContentLocator, reader: KoreanTextReader, selector: SelectorFn,
                  preprocess: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-                 cache: bool = True, merge_rows: bool = False):
+                 cache: bool = True, merge_rows: bool = False,
+                 fallback_to_original: bool = False,
+                 diagnostic_dir: Optional[Path] = None):
         """`preprocess`, if given, runs on the content crop before OCR --
         e.g. pc/detector/color_mask.py's mask_non_yellow() to blank out
         everything except a dialog's yellow "action" text, which cut OCR
@@ -116,6 +121,10 @@ class RememberedDialogText:
         applied to plain-white dialog text (see that module for which is
         which).
 
+        `fallback_to_original=True` retries OCR on the same unfiltered
+        content crop when preprocessing fails to find the target. Use for
+        menus whose action text is not consistently yellow.
+
         `cache=False` disables the "locate once, trust forever" behavior
         (re-runs OCR every find() call instead) -- see the class
         docstring for when that's necessary rather than just slower."""
@@ -125,6 +134,9 @@ class RememberedDialogText:
         self._preprocess = preprocess
         self._cache_enabled = cache
         self._merge_rows = merge_rows
+        self._fallback_to_original = fallback_to_original
+        self._diagnostic_dir = diagnostic_dir
+        self._diagnostic_saved = False
         self._cached_offset: Optional[Region] = None  # relative to content_region's top-left
 
     def find(self, frame: np.ndarray) -> Optional[Region]:
@@ -143,12 +155,39 @@ class RememberedDialogText:
             crop = self._content_locator.crop_content(frame)
             if crop is None:
                 return None
+            original_crop = crop
             if self._preprocess is not None:
                 crop = self._preprocess(crop)
             lines = self._reader.read_lines_with_boxes(crop)
             if self._merge_rows:
                 lines = merge_boxes_by_row(lines)
             off = self._selector(lines)
+            if off is None and self._preprocess is not None and self._fallback_to_original:
+                filtered_lines = lines
+                print("  [dialog OCR] filtered target missing -- retrying original dialog ROI")
+                lines = self._reader.read_lines_with_boxes(original_crop)
+                if self._merge_rows:
+                    lines = merge_boxes_by_row(lines)
+                off = self._selector(lines)
+                if self._diagnostic_dir is not None and not self._diagnostic_saved:
+                    try:
+                        self._diagnostic_dir.mkdir(parents=True, exist_ok=True)
+                        original_ok = cv2.imwrite(str(self._diagnostic_dir / "original.png"), original_crop)
+                        filtered_ok = cv2.imwrite(str(self._diagnostic_dir / "filtered.png"), crop)
+                        report = {
+                            "content_region": vars(content_region),
+                            "preprocess": getattr(self._preprocess, "__name__", str(self._preprocess)),
+                            "filtered_lines": [{"text": text, "box": vars(box)} for text, box in filtered_lines],
+                            "original_lines": [{"text": text, "box": vars(box)} for text, box in lines],
+                            "original_target": vars(off) if off is not None else None,
+                        }
+                        (self._diagnostic_dir / "ocr.json").write_text(
+                            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
+                        )
+                        self._diagnostic_saved = original_ok and filtered_ok
+                        print(f"  [dialog OCR] diagnostic saved={self._diagnostic_saved}: {self._diagnostic_dir}")
+                    except (OSError, cv2.error) as exc:
+                        print(f"  [dialog OCR] diagnostic save failed: {exc}")
             if off is None:
                 return None
             if self._cache_enabled:
