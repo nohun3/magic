@@ -614,14 +614,20 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter, region
 
 
 def click_frame_point_once(link: SerialLink, converter: FrameToMouseConverter,
-                           fx: float, fy: float) -> bool:
-    """Click one exact frame coordinate through the Arduino HID link."""
+                           fx: float, fy: float, *, right_click_first: bool = False) -> bool:
+    """Click one frame coordinate, optionally right-clicking before left-click."""
     ux, uy = converter.convert(fx, fy)
 
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
     sleep_jittered(0.15)
+    if right_click_first:
+        right_ok, hold_ms = send_random_mouse_click(link, "RIGHT")
+        print(f"    gate right-click ({hold_ms}ms) -> {'ok' if right_ok else 'FAILED (missing ACK)'}")
+        if not right_ok:
+            return False
+        sleep_jittered(0.1)
     click_ok, _ = send_random_mouse_click(link)
     if not click_ok:
         return False
@@ -1085,7 +1091,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             if safe_points:
                 safe_index = min(attempt - 1, len(safe_points) - 1)
                 safe_x, safe_y = safe_points[safe_index]
-                ok = click_frame_point_once(link, converter, safe_x, safe_y)
+                ok = click_frame_point_once(link, converter, safe_x, safe_y, right_click_first=True)
                 print(
                     f"    exposed gate click ({safe_x:.0f}, {safe_y:.0f}), "
                     f"candidate {safe_index + 1}/{len(safe_points)} -> "
