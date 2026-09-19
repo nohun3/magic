@@ -10,6 +10,13 @@ SHORT_KEY_HOLD_MIN_MS = 50
 SHORT_KEY_HOLD_MAX_MS = 80
 MOUSE_CLICK_HOLD_MIN_MS = 30
 MOUSE_CLICK_HOLD_MAX_MS = 50
+INPUT_INTERVAL_MIN_S = 0.10
+INPUT_INTERVAL_MAX_S = 0.15
+
+
+def sleep_input_interval() -> None:
+    """Wait a fresh 100-150ms between input actions, without extra jitter."""
+    time.sleep(random.uniform(INPUT_INTERVAL_MIN_S, INPUT_INTERVAL_MAX_S))
 
 
 def sleep_jittered(seconds: float, jitter_seconds: float = DEFAULT_JITTER_SECONDS) -> None:

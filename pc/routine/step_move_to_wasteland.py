@@ -71,7 +71,7 @@ from pc.detector.template_locator import MatchResult, locate_template  # noqa: E
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
 from pc.routine.step_move_to_hotel import click_chat_region, double_click_region, ensure_skill_tab, park_cursor, _capture_and_convert  # noqa: E402
-from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_jittered, sleep_transition_randomized  # noqa: E402
+from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_input_interval, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing the teleport-scroll F10 shortcut before the
 # dialog has finished opening/rendering.
@@ -118,11 +118,19 @@ def _select_wasteland_gate_destination(lines: List[Tuple[str, Region]]) -> Optio
         return box.top + box.height / 2
 
     simyeon_centers = [row_center(box) for text, box in lines if GATE_SIBLING_NEEDLE in compact(text)]
+    paid_centers = [
+        row_center(box) for text, box in lines
+        if "아데나" in compact(text) or "385" in compact(text)
+    ]
     for text, box in lines:
         if GATE_DESTINATION_NEEDLE not in compact(text):
             continue
         center = row_center(box)
         if any(abs(center - sc) < GATE_ROW_Y_TOLERANCE for sc in simyeon_centers):
+            continue
+        # The F11 paid menu can remain open after an ineffective click.
+        # Its identically named row is not the gate destination dialog.
+        if any(abs(center - pc) < GATE_ROW_Y_TOLERANCE for pc in paid_centers):
             continue
         return box
     return None
@@ -621,17 +629,17 @@ def click_frame_point_once(link: SerialLink, converter: FrameToMouseConverter,
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    sleep_jittered(0.15)
+    sleep_input_interval()
     if right_click_first:
         right_ok, hold_ms = send_random_mouse_click(link, "RIGHT")
         print(f"    gate right-click ({hold_ms}ms) -> {'ok' if right_ok else 'FAILED (missing ACK)'}")
         if not right_ok:
             return False
-        sleep_jittered(0.1)
+        sleep_input_interval()
     click_ok, _ = send_random_mouse_click(link)
     if not click_ok:
         return False
-    sleep_jittered(0.1)
+    sleep_input_interval()
     park_cursor(link, converter)
     return True
 
@@ -650,11 +658,11 @@ def click_frame_ratio_once(link: SerialLink, converter: FrameToMouseConverter,
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    sleep_jittered(0.15)
+    sleep_input_interval()
     click_ok, _ = send_random_mouse_click(link)
     if not click_ok:
         return False
-    sleep_jittered(0.1)
+    sleep_input_interval()
     park_cursor(link, converter)
     return True
 
@@ -669,15 +677,15 @@ def double_click_text_center(link: SerialLink, converter: FrameToMouseConverter,
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    sleep_jittered(0.15)
+    sleep_input_interval()
     click1_ok, _ = send_random_mouse_click(link)
     if not click1_ok:
         return False
-    sleep_jittered(0.12)
+    sleep_input_interval()
     click2_ok, _ = send_random_mouse_click(link)
     if not click2_ok:
         return False
-    sleep_jittered(0.1)
+    sleep_input_interval()
     park_cursor(link, converter)
     return True
 
@@ -866,14 +874,19 @@ def _use_npc_teleporter_fallback(
             f"  [fallback] '버림받은 자들의 땅: 385   아데나' OCR "
             f"{attempt}/{FALLBACK_DIALOG_OCR_ATTEMPTS}: {paid_wasteland}"
         )
-        if paid_wasteland is not None:
-            break
-    if paid_wasteland is None or not click_region_once(
-        link, converter, paid_wasteland
-    ):
-        print("[stop] paid wasteland destination click failed.")
-        return False
-    return True
+        if paid_wasteland is None:
+            continue
+        if not click_region_once(link, converter, paid_wasteland):
+            print("[stop] paid wasteland destination click failed.")
+            return False
+        sleep_jittered(DIALOG_OPEN_SETTLE_S)
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if paid_wasteland_text.find(frame) is None:
+            print("  [fallback] paid destination menu cleared -- proceeding to gate search")
+            return True
+        print("  [fallback] paid destination menu still visible -- retrying its click")
+    print("[stop] paid destination menu did not clear after retries; gate search cancelled.")
+    return False
 
 
 def _verify_wasteland_arrival(

@@ -56,7 +56,7 @@ from pc.detector.color_mask import mask_non_yellow  # noqa: E402
 from pc.detector.template_locator import locate_template  # noqa: E402
 from pc.action.frame_to_mouse import FrameToMouseConverter  # noqa: E402
 from pc.serial.serial_link import SerialLink  # noqa: E402
-from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_jittered, sleep_transition_randomized  # noqa: E402
+from pc.routine.timing import send_random_key_tap, send_random_mouse_click, sleep_input_interval, sleep_jittered, sleep_transition_randomized  # noqa: E402
 
 # How long to wait after pressing F2 before the tab swap has visibly
 # finished (icons re-render) -- generous but this step only runs
@@ -305,15 +305,15 @@ def double_click_region(link: SerialLink, converter: FrameToMouseConverter, regi
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    sleep_jittered(0.15)
+    sleep_input_interval()
     click1_ok, _ = send_random_mouse_click(link)
     if not click1_ok:
         return False
-    sleep_jittered(0.12)
+    sleep_input_interval()
     click2_ok, _ = send_random_mouse_click(link)
     if not click2_ok:
         return False
-    sleep_jittered(0.1)
+    sleep_input_interval()
     park_cursor(link, converter)
     return True
 
@@ -330,7 +330,7 @@ def press_escape_keys(link: SerialLink) -> bool:
         if ack is None or not ack.ok:
             print(f"    ESC {i + 1}/{count} -> FAILED (missing ACK)")
             return False
-        sleep_jittered(0.15)
+        sleep_input_interval()
     print(f"    ESC x{count} -> ok")
     return True
 
@@ -440,11 +440,11 @@ def click_region_once(link: SerialLink, converter: FrameToMouseConverter,
     move_ack = link.send_and_wait("MOUSE_MOVE", f"{ux} {uy}")
     if move_ack is None or not move_ack.ok:
         return False
-    sleep_jittered(0.15)
+    sleep_input_interval()
     click_ok, _ = send_random_mouse_click(link)
     if not click_ok:
         return False
-    sleep_jittered(0.1)
+    sleep_input_interval()
     park_cursor(link, converter)
     return True
 
