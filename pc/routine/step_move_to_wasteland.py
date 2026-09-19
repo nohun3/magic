@@ -19,11 +19,11 @@ sub-action 3은 아이콘이 아니라 게임 월드에 렌더링되는 오브�
 패널에 스코프하지 않고 프레임 전체를 대상으로 template matching한다 (npc_hotel_manager
 때와 동일한 이유 -- 이름표 텍스트가 아니라 스프라이트 자체를 클릭해야 상호작용됨).
 
-세 텍스트 찾기(2, 4, 5번)는 전부 RememberedDialogText를 통해서 한다 -- 서로 다른
-dialog 내용이라 인스턴스도 각각 별개(캐시 공유 안 함). OCR은 인스턴스당 최초 1회만
-돌고, 그 뒤로는 위치를 기억해서 dialog anchor(OCR 아닌, 싼 템플릿 매칭)만 다시
-맞춰 클릭한다. 같은 dialog를 여러 번 여닫는 실제 반복 루틴에서 OCR 비용을 없애기
-위함 -- pc/detector/remembered_text.py 참고.
+텍스트 클릭은 F11 대체 경로까지 모두 RememberedDialogText를 통해서 한다.
+roi_dialog에서 추출한 테두리 앵커와 설정된 content_offset으로 대화창 내부를
+자른 뒤 노란 글씨를 우선 OCR한다. 색상이 일정하지 않은 이동 메뉴는 실패 시
+같은 ROI의 원본으로 재확인한다. 매번 다시 인식해 이전 대화창의 클릭 좌표를
+재사용하지 않는다 -- pc/detector/remembered_text.py 참고.
 
 4번은 "버림받은 자들의 땅:심연"이라는 형제 항목이 같은 dialog에 같이 있어서 원래는
 공백 제거 후 완전 일치(exact_match_fn)로 걸렀는데, 실기 테스트에서 PaddleOCR이
@@ -84,7 +84,10 @@ NPC_TELEPORTER_MAX_ATTEMPTS = 5
 NPC_TELEPORTER_RETRY_INTERVAL_S = 0.6
 WASTELAND_NEEDLES = ("오렌", "버땅")
 STEP_FORWARD_NEEDLES = ("발을", "내딛는다")
-OTHER_REGION_NEEDLES = ("다른", "지역")
+OTHER_REGION_TEXT_ALIASES = (
+    "다른지역으로가고싶습니다",
+    "나른지역으로가고싶습니다",
+)
 PAID_WASTELAND_NEEDLES = ("버림받은", "385", "아데나")
 OREN_TELEPORTER_NEEDLES = ("오렌", "텔레포터")
 FALLBACK_DIALOG_OCR_ATTEMPTS = 3
@@ -247,7 +250,7 @@ def save_gate_failure_frame(frame: np.ndarray, output_dir: Path, attempt: int,
 def build_wasteland_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
     """"* [오렌] 버땅" inside the icon_teleport_scroll dialog."""
     content_locator = _build_dialog_content_locator(settings, project_root)
-    return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*WASTELAND_NEEDLES)))
+    return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*WASTELAND_NEEDLES)), preprocess=mask_non_yellow, cache=False, fallback_to_original=True)
 
 
 def build_gate_destination_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
@@ -259,10 +262,9 @@ def build_gate_destination_text_locator(settings: dict, project_root: Path, read
     yellow against an otherwise-white-text lore paragraph, so both mask
     to yellow-only before OCR -- ~10x faster (measured 7810ms ->
     805ms) and, as a side effect, fixed the "자들의 땅" misrecognition
-    documented above (see mask_non_yellow()'s docstring for why). Not
-    applied to the icon_teleport_scroll dialog's plain-white list
-    (build_wasteland_text_locator) or the NPC-menu/OK dialogs in
-    step_buy_hotel_key.py -- their target text isn't yellow.
+    documented above (see mask_non_yellow()'s docstring for why).
+    Gate confirmation text uses this yellow-only dialog crop; travel
+    menus can retry the original ROI when their text has another color.
 
     cache=False: this follows a low-confidence npc_teleport_gate click
     (a template match that can land on a false positive -- confirmed
@@ -287,17 +289,26 @@ def build_step_forward_text_locator(settings: dict, project_root: Path, reader: 
     return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*STEP_FORWARD_NEEDLES)), preprocess=mask_non_yellow, cache=False)
 
 
+def _matches_other_region_text(text: str) -> bool:
+    """Accept the exact menu sentence and its observed yellow-OCR alias.
+
+    The saved original/filtered pair in output/dialog_ocr_other_region
+    showed '다른' read as '나른' after masking. Require the rest of the
+    sentence in full rather than broadly matching any mention of a region.
+    """
+    return "".join(text.split()).rstrip(".") in OTHER_REGION_TEXT_ALIASES
+
+
 def build_other_region_text_locator(settings: dict, project_root: Path,
                                     reader: KoreanTextReader) -> RememberedDialogText:
     """NPC teleporter menu entry: '다른 지역으로 가고 싶습니다.'."""
     return RememberedDialogText(
         _build_dialog_content_locator(settings, project_root),
         reader,
-        first_matching(needles_match_fn(*OTHER_REGION_NEEDLES)),
-        # This NPC menu is not guaranteed to use the same yellow shade as
-        # the gate dialogs. OCR the original crop so the colour mask cannot
-        # erase the target text.
-        preprocess=None,
+        first_matching(_matches_other_region_text),
+        preprocess=mask_non_yellow,
+        fallback_to_original=True,
+        diagnostic_dir=project_root / "output" / "dialog_ocr_other_region",
         cache=False,
         merge_rows=True,
     )
@@ -311,6 +322,7 @@ def build_oren_teleporter_text_locator(
         _build_dialog_content_locator(settings, project_root),
         reader,
         first_matching(needles_match_fn(*OREN_TELEPORTER_NEEDLES)),
+        preprocess=mask_non_yellow,
         cache=False,
     )
 
@@ -327,7 +339,8 @@ def build_paid_wasteland_text_locator(settings: dict, project_root: Path,
         _build_dialog_content_locator(settings, project_root),
         reader,
         first_matching(needles_match_fn(*PAID_WASTELAND_NEEDLES)),
-        preprocess=None,
+        preprocess=mask_non_yellow,
+        fallback_to_original=True,
         cache=False,
         merge_rows=True,
     )
@@ -923,9 +936,9 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         link, settings, project_root, window_title, screen_capture_cls
     ):
         return False
-    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 50.0))
+    hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 40.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
-    gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.20))
+    gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.10))
     gate_miss_click_x_jitter = float(settings.get("step3", {}).get("gate_miss_click_x_jitter", 0.15))
     gate_miss_click_y_jitter = float(settings.get("step3", {}).get("gate_miss_click_y_jitter", 0.05))
 
