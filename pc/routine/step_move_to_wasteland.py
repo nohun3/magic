@@ -21,8 +21,9 @@ sub-action 3은 아이콘이 아니라 게임 월드에 렌더링되는 오브�
 
 텍스트 클릭은 F11 대체 경로까지 모두 RememberedDialogText를 통해서 한다.
 roi_dialog에서 추출한 테두리 앵커와 설정된 content_offset으로 대화창 내부를
-자른 뒤 노란 글씨를 우선 OCR한다. 색상이 일정하지 않은 이동 메뉴는 실패 시
-같은 ROI의 원본으로 재확인한다. 매번 다시 인식해 이전 대화창의 클릭 좌표를
+자른 뒤 F10 이동 목록은 원본을 바로 OCR하고, F11 메뉴와 게이트 대화문은
+노란 글씨를 우선 OCR한다. F11 이동 메뉴는 실패 시 같은 ROI의 원본으로
+재확인한다. 매번 다시 인식해 이전 대화창의 클릭 좌표를
 재사용하지 않는다 -- pc/detector/remembered_text.py 참고.
 
 4번은 "버림받은 자들의 땅:심연"이라는 형제 항목이 같은 dialog에 같이 있어서 원래는
@@ -256,9 +257,12 @@ def save_gate_failure_frame(frame: np.ndarray, output_dir: Path, attempt: int,
 
 
 def build_wasteland_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
-    """"* [오렌] 버땅" inside the icon_teleport_scroll dialog."""
+    """Read F10's non-yellow destination list directly from the dialog ROI."""
     content_locator = _build_dialog_content_locator(settings, project_root)
-    return RememberedDialogText(content_locator, reader, first_matching(needles_match_fn(*WASTELAND_NEEDLES)), preprocess=mask_non_yellow, cache=False, fallback_to_original=True)
+    return RememberedDialogText(
+        content_locator, reader, first_matching(needles_match_fn(*WASTELAND_NEEDLES)),
+        preprocess=None, cache=False,
+    )
 
 
 def build_gate_destination_text_locator(settings: dict, project_root: Path, reader: KoreanTextReader) -> RememberedDialogText:
