@@ -357,7 +357,7 @@ dialog:
 
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
-  mp_ready_percent: 98.0
+  mp_ready_percent: 97.0
   # F8 can succeed before its buff icon is rendered. Wait, then require all
   # configured checks to miss before sending the one allowed retry.
   meditation_buff_settle_seconds: 0.8
