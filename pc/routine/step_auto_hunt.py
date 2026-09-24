@@ -499,7 +499,7 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     import pc.routine.step_move_to_hotel as step2
     global _last_step2_failure_reason
     _last_step2_failure_reason = None
-    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 94.0))
+    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 98.0))
 
     while True:
         # The hotel key is a persistent precondition for every [2단계]
