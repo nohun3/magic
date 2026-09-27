@@ -388,7 +388,7 @@ routine:
   pre_step4_teleport_settle_max_seconds: 1.0
   # During Step 4, teleport when MP has not decreased for this many ticks.
   teleport_on_mp_stagnation: true
-  mp_stagnant_ticks_before_teleport: 5
+  mp_stagnant_ticks_before_teleport: 3
   # In Step 4, five consecutive fresh screen-timer readings at or below
   # five minutes finish combat, complete Step 2, then wait before Step 3.
   dungeon_low_exit_seconds: 300

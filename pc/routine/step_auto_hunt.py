@@ -18,11 +18,11 @@
      반응하지 않는 이유는 실기에서 확인됨: OCR이 자릿수를 통째로 잘못 읽어
      (예: "358"을 "3"으로) MP가 실제로는 70% 넘게 남아있는데도 5% 이하로
      오인식해서 여관키를 쓴 적이 있었다.
-   - (위 두 경우가 아니면) MP가 5틱 연속으로 줄지 않았으면 F7 텔레포트
+   - (위 두 경우가 아니면) MP가 3틱 연속으로 줄지 않았으면 F7 텔레포트
      -- 자동사냥(ATS)이 스킬을 쓰면 MP가 소모되는데, 그게 계속 안 줄었다는 건 근처에
      잡을 몬스터가 없어서 ATS가 멈춰 있다는 뜻으로 보고, 사냥터를 옮기기 위해 다시
      텔레포트한다. 1틱만 보고 바로 반응하면 OCR/타이밍 노이즈(스킬이 마침 그 틱에
-     0 코스트였다든가)에도 반응해버려서 5틱 연속 조건으로 완화했다.
+     0 코스트였다든가)에도 반응해버려서 3틱 연속 조건으로 완화했다.
    - icon_ats_off가 감지되면 ATS가 자동으로 꺼진 것으로 보고 즉시 모니터링을
      종료한 뒤 ensure_step2()를 통해 [2단계]부터 다시 진행한다.
 
@@ -91,7 +91,7 @@ MP_EXIT_CONSECUTIVE_TICKS = 2
 # that happened to cost 0 this exact tick, etc.) -- reacting to a single
 # non-decreasing tick was too trigger-happy. Only teleport once MP has
 # failed to drop for this many *consecutive* ticks in a row.
-MP_STAGNANT_TICKS_BEFORE_TELEPORT = 5
+MP_STAGNANT_TICKS_BEFORE_TELEPORT = 3
 LOW_DUNGEON_TIME = "low_dungeon_time"
 
 # Safety cap so a stuck read (e.g. HP/MP anchor never re-appears) can't
