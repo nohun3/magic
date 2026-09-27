@@ -91,7 +91,7 @@ class RoutineController:
 
         self.mp_stagnation_teleport_check = tk.Checkbutton(
             secondary_options,
-            text="MP 5틱 미감소 시 텔레포트",
+            text="MP 3틱 미감소 시 텔레포트",
             variable=self.teleport_on_mp_stagnation,
         )
         self.mp_stagnation_teleport_check.pack(anchor="w")
