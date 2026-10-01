@@ -28,7 +28,9 @@ def ensure_equipment(settings, project_root, link, skill_panel, window_title,
     threshold = float(cfg["match_threshold"])
     margin = float(cfg["score_margin"])
 
-    def read_state():
+    def read_state(expected=None):
+        # Initial detection accepts either stable set. After F6, a stable old
+        # set must not end verification early while the game is transitioning.
         previous = None
         for attempt in range(attempts):
             with screen_capture_cls(window_title=window_title) as cap:
@@ -56,7 +58,8 @@ def ensure_equipment(settings, project_root, link, skill_panel, window_title,
                     f"  [equipment] set1={scores[1]:.3f} set2={scores[2]:.3f} "
                     f"threshold={threshold:.2f} margin={margin:.2f} state={current}"
                 )
-            if current is not None and current == previous:
+            if (current is not None and current == previous
+                    and (expected is None or current == expected)):
                 return current
             previous = current
             if attempt + 1 < attempts:
@@ -76,7 +79,7 @@ def ensure_equipment(settings, project_root, link, skill_panel, window_title,
     if not ok:
         return False
     sleep_jittered(max(0.0, float(cfg["settle_seconds"])), jitter_seconds=0.0)
-    if read_state() != target:
+    if read_state(expected=target) != target:
         print(f"  [equipment] set {target} not confirmed")
         return False
     print(f"  [equipment] set {target} confirmed")

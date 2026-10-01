@@ -443,26 +443,18 @@ def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
                      link: SerialLink, skill_panel: SkillPanelLocator,
                      hotel_text, rent_room_text, ok_button_text,
                      screen_capture_cls) -> bool:
-    """Ensure the hotel key exists, running Step 1 once when absent."""
+    """Run Step 1 only after repeated valid observations miss the hotel key."""
     import pc.routine.step_buy_hotel_key as step1
+    from pc.routine.hotel_key_check import check_hotel_key
 
     for check_attempt in range(1, 3):
-        if not step1.ensure_visible_skill_tab(
-            link, skill_panel, window_title, screen_capture_cls
-        ):
-            print("  [hotel key] skill panel unavailable")
-            _set_step2_failure("F2 입력 후 roi_skill 패널을 인식하지 못해 여관 열쇠를 확인할 수 없음")
-            return False
-        with screen_capture_cls(window_title=window_title) as cap:
-            frame = cap.grab()
-        hotel_key = build_icon_detector(
-            settings["icons"]["hotel_key"], project_root, panel=skill_panel
-        ).measure(frame)
-        print(
-            f"  [hotel key] check {check_attempt}: "
-            f"present={hotel_key.present} score={hotel_key.match_score:.3f}"
+        key_present = check_hotel_key(
+            settings, project_root, link, skill_panel, window_title, screen_capture_cls,
         )
-        if hotel_key.present:
+        if key_present is None:
+            _set_step2_failure("여관 열쇠 판독 불확실: 구매하지 않고 중단함")
+            return False
+        if key_present:
             return True
         if check_attempt == 2:
             print("  [hotel key] still absent after [1단계]")
@@ -475,7 +467,7 @@ def ensure_hotel_key(settings: dict, project_root: Path, window_title: str,
             hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
         ):
             print("  [1단계] failed.")
-            _set_step2_failure("여관 열쇠가 없어 실행한 1단계 열쇠 구매가 실패함")
+            _set_step2_failure("여관 열쇠 반복 미검출 후 실행한 1단계 구매가 실패함")
             return False
     _set_step2_failure("여관 열쇠 확인이 완료되지 않음")
     return False
@@ -499,7 +491,7 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     import pc.routine.step_move_to_hotel as step2
     global _last_step2_failure_reason
     _last_step2_failure_reason = None
-    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
+    mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 95.0))
 
     # The hotel key is a persistent precondition for every [2단계]
     # entry, independent of current MP.
