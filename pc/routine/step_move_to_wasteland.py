@@ -959,6 +959,14 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         link, settings, project_root, window_title, screen_capture_cls
     ):
         return False
+    from pc.routine.equipment import ensure_equipment
+
+    if not ensure_equipment(
+        settings, project_root, link, skill_panel, window_title,
+        screen_capture_cls, target=2,
+    ):
+        print("  [3단계] 장비 2 확인·전환 실패 -- 사냥터 이동 중단")
+        return False
     hp_exit_percent = float(settings.get("step3", {}).get("hp_exit_percent", 40.0))
     gate_miss_click_x_ratio = float(settings.get("step3", {}).get("gate_miss_click_x_ratio", 0.50))
     gate_miss_click_y_ratio = float(settings.get("step3", {}).get("gate_miss_click_y_ratio", 0.10))

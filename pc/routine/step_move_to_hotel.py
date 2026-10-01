@@ -75,8 +75,6 @@ MP_POLL_INTERVAL_S = 1.0
 EVENT_DIALOG_SETTLE_S = 0.6
 EVENT_NPC_SETTLE_S = 0.6
 MAX_EVENT_RESTARTS_PER_STEP2 = 3
-HASTE_KEY_HOLD_MIN_S = 6.0
-HASTE_KEY_HOLD_MAX_S = 7.0
 CLOSE_CLICK_SETTLE_S = 0.3
 EVENT_MERCHANT_NEEDLES = ("기란", "잡화", "상인")
 
@@ -99,10 +97,6 @@ def build_hotel_key_detector(settings: dict, project_root: Path, skill_panel: Sk
 
 def build_meditation_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
     return build_icon_detector(settings["buffs"]["meditation"], project_root, panel=buff_panel)
-
-
-def build_haste_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
-    return build_icon_detector(settings["buffs"]["haste"], project_root, panel=buff_panel)
 
 
 def build_event_buff_detector(settings: dict, project_root: Path, buff_panel: SkillPanelLocator) -> AnyPresenceDetector:
@@ -349,6 +343,53 @@ def _wait_for_mp_at_least(mp_detector, min_mp: int, window_title: str, screen_ca
         sleep_jittered(poll_interval_s)
 
 
+def _diagnose_meditation_buff(settings, project_root, frame, buff_panel,
+                              phase, attempt, save_frame=False):
+    """Report ROI failure separately from icon mismatch without changing detection."""
+    try:
+        region = buff_panel.locate(frame)
+        roi_threshold = settings["roi_buff"]["match_threshold"]
+        print(
+            f"  [meditation diagnostic] {phase} {attempt}: "
+            f"roi_found={region is not None} "
+            f"roi_last_search_score={buff_panel.last_match_score:.3f} "
+            f"roi_threshold={roi_threshold} region={region}"
+        )
+        crop = None
+        if region is not None:
+            crop = frame[region.top:region.top + region.height,
+                         region.left:region.left + region.width]
+            cfg = settings["buffs"]["meditation"]
+            template = cv2.imread(str(project_root / cfg["template"]))
+            if template is None:
+                print("  [meditation diagnostic] buff template unreadable")
+            elif (crop.shape[0] < template.shape[0]
+                  or crop.shape[1] < template.shape[1]):
+                print("  [meditation diagnostic] buff template larger than ROI")
+            else:
+                scores = cv2.matchTemplate(crop, template, cv2.TM_CCOEFF_NORMED)
+                _, score, _, position = cv2.minMaxLoc(scores)
+                print(
+                    f"  [meditation diagnostic] icon_best_score={score:.3f} "
+                    f"icon_threshold={cfg.get('match_threshold', 0.8)} "
+                    f"position_in_roi={position}"
+                )
+        if save_frame:
+            output_dir = project_root / "output" / "meditation_diagnostics"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            # Keep only the latest failure for each phase to bound disk use.
+            for name, pixels in (("screen", frame), ("roi", crop)):
+                path = output_dir / f"{phase}_{name}.png"
+                if pixels is None:
+                    path.unlink(missing_ok=True)
+                elif cv2.imwrite(str(path), pixels):
+                    print(f"  [meditation diagnostic] saved {path}")
+                else:
+                    print(f"  [meditation diagnostic] failed to save {path}")
+    except Exception as exc:
+        print(f"  [meditation diagnostic] failed: {exc}")
+
+
 def _wait_for_meditation_buff(settings: dict, project_root: Path, link: SerialLink,
                               window_title: str, screen_capture_cls,
                               phase: str) -> PresenceResult:
@@ -380,6 +421,10 @@ def _wait_for_meditation_buff(settings: dict, project_root: Path, link: SerialLi
         )
         if last_result.present:
             return last_result
+        _diagnose_meditation_buff(
+            settings, project_root, frame, buff_panel, phase, attempt,
+            save_frame=attempt == attempts,
+        )
         if attempt < attempts:
             sleep_jittered(interval_s, jitter_seconds=0.0)
     return last_result
@@ -531,78 +576,46 @@ def _handle_event_if_present(
 
     event_wait_s = sleep_transition_randomized()
     print(f"  [event] waited {event_wait_s:.2f}s for teleport")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
     npc_cfg = settings["npcs"]["event"]
-    npc_template = cv2.imread(str(project_root / npc_cfg["template"]))
-    if npc_template is None:
-        print("  [event] npc_event template could not be loaded")
-        return False
-    npc_match = locate_template(
-        frame, npc_template, npc_cfg.get("match_threshold", 0.85)
+    template_dir = (project_root / npc_cfg["template"]).parent
+    template_paths = sorted(
+        (path for path in template_dir.glob(npc_cfg.get("template_glob", "npc_event*"))
+         if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp"}),
+        key=lambda path: path.name.lower(),
     )
-    if npc_match is None:
-        print("  [event] npc_event not found")
+    if not template_paths:
+        print(f"  [event] no npc_event images found in {template_dir}")
         return False
-    if not click_region_once(link, converter, npc_match.region):
-        print("  [event] npc_event click failed")
-        return False
-    print("  [event] npc_event clicked -- restarting [2단계]")
-    sleep_jittered(EVENT_NPC_SETTLE_S)
-    return True
-
-
-def ensure_haste_before_step3(
-    settings: dict,
-    project_root: Path,
-    link: SerialLink,
-    window_title: str,
-    screen_capture_cls,
-) -> bool | None:
-    """Apply haste when absent, then tell the caller to restart Step 2."""
-    buff_panel = build_buff_panel(settings, project_root)
-    frame = _capture_for_buff_check(
-        settings, project_root, window_title, link, screen_capture_cls
-    )
-    haste_buff = build_haste_buff_detector(
-        settings, project_root, buff_panel
-    ).measure(frame)
-    if haste_buff.present:
-        print(
-            f"  haste buff active (score={haste_buff.match_score:.3f}) "
-            "-- proceeding to [3단계]"
+    all_clicked = True
+    for template_path in template_paths:
+        npc_template = cv2.imread(str(template_path))
+        if npc_template is None:
+            print(f"  [event] {template_path.name} could not be loaded")
+            all_clicked = False
+            continue
+        # A click can change the screen; locate each next NPC on a fresh frame.
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        if (npc_template.shape[0] > frame.shape[0]
+                or npc_template.shape[1] > frame.shape[1]):
+            print(f"  [event] {template_path.name} is larger than the captured frame")
+            all_clicked = False
+            continue
+        npc_match = locate_template(
+            frame, npc_template, npc_cfg.get("match_threshold", 0.85)
         )
-        return None
-
-    hold_seconds = random.uniform(HASTE_KEY_HOLD_MIN_S, HASTE_KEY_HOLD_MAX_S)
-    print(
-        f"  haste buff not active (score={haste_buff.match_score:.3f}) "
-        f"-- holding F6 for {hold_seconds:.1f}s"
-    )
-    key_down_ack = link.send_and_wait("KEYDOWN", "F6")
-    if key_down_ack is None or not key_down_ack.ok:
-        print("  [haste] F6 KEYDOWN not ACKed")
+        if npc_match is None:
+            print(f"  [event] {template_path.name} not found")
+            all_clicked = False
+            continue
+        if not click_region_once(link, converter, npc_match.region):
+            print(f"  [event] {template_path.name} click failed")
+            return False
+        print(f"  [event] {template_path.name} clicked")
+        sleep_jittered(EVENT_NPC_SETTLE_S)
+    if not all_clicked:
+        print("  [event] some NPC images could not be clicked")
         return False
-
-    key_up_ack = None
-    try:
-        hold_deadline = time.monotonic() + hold_seconds
-        while True:
-            remaining = hold_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            sleep_jittered(min(1.0, remaining), jitter_seconds=0.0)
-            if time.monotonic() < hold_deadline:
-                # Keep Arduino's 5-second connection watchdog satisfied while
-                # F6 is intentionally held for longer than that timeout.
-                link.send("PING")
-    finally:
-        key_up_ack = link.send_and_wait("KEYUP", "F6")
-
-    if key_up_ack is None or not key_up_ack.ok:
-        print("  [haste] F6 KEYUP not ACKed")
-        return False
-
-    print(f"  [haste] F6 held for {hold_seconds:.1f}s and released -- restarting [2단계]")
+    print(f"  [event] all {len(template_paths)} NPC images clicked -- restarting [2단계]")
     return True
 
 
@@ -675,6 +688,15 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                 "reached -- stopping to avoid an infinite loop"
             )
             return False
+
+    from pc.routine.equipment import ensure_equipment
+
+    if not ensure_equipment(
+        settings, project_root, link, skill_panel, window_title,
+        screen_capture_cls, target=1,
+    ):
+        print("  [2단계] 장비 1 확인·전환 실패 -- MP 충전 단계 중단")
+        return False
 
     # -- sub-action 2: meditation --
     # Do not toggle/cancel meditation when it is already active. The

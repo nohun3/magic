@@ -501,39 +501,28 @@ def ensure_step2(settings: dict, project_root: Path, window_title: str, link: Se
     _last_step2_failure_reason = None
     mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 97.0))
 
-    while True:
-        # The hotel key is a persistent precondition for every [2단계]
-        # entry, independent of current MP.
-        if not ensure_hotel_key(
-            settings, project_root, window_title, link, skill_panel,
-            hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
-        ):
-            return False
+    # The hotel key is a persistent precondition for every [2단계]
+    # entry, independent of current MP.
+    if not ensure_hotel_key(
+        settings, project_root, window_title, link, skill_panel,
+        hotel_text, rent_room_text, ok_button_text, screen_capture_cls,
+    ):
+        return False
 
-        ok = step2.run(
-            settings, project_root, window_title, link, skill_panel, mp_detector,
-            screen_capture_cls, korean_reader,
-            skip_hotel_teleport=skip_hotel_teleport_once,
-        )
-        skip_hotel_teleport_once = False
-        if not ok:
-            print("  [2단계] failed.")
-            _set_step2_failure("여관 이동·명상 실행 과정이 실패함")
-            return False
-        _wait_for_ready_hp_mp(
-            hp_detector, mp_detector, window_title, screen_capture_cls,
-            mp_ready_percent,
-        )
-
-        haste_result = step2.ensure_haste_before_step3(
-            settings, project_root, link, window_title, screen_capture_cls,
-        )
-        if haste_result is False:
-            print("  [2단계] haste preparation failed.")
-            _set_step2_failure("3단계 진입 전 가속 버프 준비가 실패함")
-            return False
-        if haste_result is None:
-            return True
+    ok = step2.run(
+        settings, project_root, window_title, link, skill_panel, mp_detector,
+        screen_capture_cls, korean_reader,
+        skip_hotel_teleport=skip_hotel_teleport_once,
+    )
+    if not ok:
+        print("  [2단계] failed.")
+        _set_step2_failure("2단계 실행 실패: 위 로그의 여관·이벤트·장비·명상 상세 원인 확인")
+        return False
+    _wait_for_ready_hp_mp(
+        hp_detector, mp_detector, window_title, screen_capture_cls,
+        mp_ready_percent,
+    )
+    return True
 
 
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
