@@ -133,13 +133,10 @@ roi_buff:
 buffs:
   meditation:
     template: templates/buff_meditation.png
-    match_threshold: 0.85
+    match_threshold: 0.75
   event:
     template: templates/buff_event.png
     match_threshold: 0.85
-  haste:
-    template: templates/buff_haste.png
-    match_threshold: 0.85  # placeholder, same default as the other buffs -- not yet live-calibrated
   mana:
     template: templates/buff_mana.png
     match_threshold: 0.85
@@ -189,9 +186,6 @@ icons:
   heel:
     template: templates/icon_heel.png
     match_threshold: 0.85
-  haste:
-    template: templates/icon_haste.png
-    match_threshold: 0.85  # placeholder, same default as the other icons -- not yet live-calibrated
   mana:
     template: templates/icon_mana.png
     match_threshold: 0.85
@@ -229,6 +223,8 @@ npcs:
     failed_location_exclusion_radius_px: 60
   event:
     template: templates/npc_event.png
+    # Click each matching image once, in filename order, from this folder.
+    template_glob: npc_event*
     match_threshold: 0.85
   hotel_manager:
     template: templates/npc_hotel_manager.png
@@ -354,6 +350,17 @@ dialog:
   template: templates/roi_dialog_border.png
   match_threshold: 0.75
   content_offset: {left: -365, top: 35, width: 432, height: 535}
+
+# Confirm equipment in roi_skill: set 1 for recovery, set 2 for hunting.
+equipment:
+  device_1_template: templates/icon_device_1.png
+  device_2_template: templates/icon_device_2.png
+  toggle_key: F6
+  match_threshold: 0.85
+  score_margin: 0.05
+  settle_seconds: 0.8
+  verify_attempts: 4
+  verify_interval_seconds: 0.3
 
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
