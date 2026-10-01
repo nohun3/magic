@@ -600,10 +600,16 @@ def _handle_event_if_present(
             print(f"  [event] {template_path.name} is larger than the captured frame")
             all_clicked = False
             continue
-        npc_match = locate_template(
-            frame, npc_template, npc_cfg.get("match_threshold", 0.85)
-        )
-        if npc_match is None:
+        threshold = float(npc_cfg.get("match_threshold", 0.85))
+        # Search without filtering so failed matches also retain their score.
+        npc_match = locate_template(frame, npc_template, -1.0)
+        if npc_match is not None:
+            print(
+                f"  [event] {template_path.name} "
+                f"match_score={npc_match.score:.6f} threshold={threshold:.6f} "
+                f"region={npc_match.region}"
+            )
+        if npc_match is None or npc_match.score < threshold:
             print(f"  [event] {template_path.name} not found")
             all_clicked = False
             continue

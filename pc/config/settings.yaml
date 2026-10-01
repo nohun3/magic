@@ -225,7 +225,7 @@ npcs:
     template: templates/npc_event.png
     # Click each matching image once, in filename order, from this folder.
     template_glob: npc_event*
-    match_threshold: 0.85
+    match_threshold: 0.50
   hotel_manager:
     template: templates/npc_hotel_manager.png
     # Measured 0.907-1.0 across several independent live frames (same
@@ -357,7 +357,8 @@ equipment:
   device_2_template: templates/icon_device_2.png
   toggle_key: F6
   match_threshold: 0.85
-  score_margin: 0.05
+  # Observed set 2 scores: 0.934 vs 0.905; keep two-frame confirmation.
+  score_margin: 0.02
   settle_seconds: 0.8
   verify_attempts: 4
   verify_interval_seconds: 0.3
