@@ -944,6 +944,26 @@ def _verify_wasteland_arrival(
     return False
 
 
+def _wait_for_step3_dialog(settings, locator, link, window_title,
+                           screen_capture_cls, hp_detector, hp_exit_percent):
+    """Poll fresh frames without repeating the input that opened the dialog."""
+    cfg = settings.get("step3", {})
+    attempts = max(1, int(cfg.get("dialog_verify_attempts", 3)))
+    interval = max(0.0, float(cfg.get("dialog_verify_interval_seconds", 0.3)))
+    for attempt in range(1, attempts + 1):
+        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
+        hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+        if hp_f12 is not None:
+            return None, converter, hp_f12
+        target = locator.find(frame)
+        print(f"  [3단계 dialog] check {attempt}/{attempts}: found={target is not None}")
+        if target is not None:
+            return target, converter, None
+        if attempt < attempts:
+            sleep_jittered(interval, jitter_seconds=0.0)
+    return None, converter, None
+
+
 def run(settings: dict, project_root: Path, window_title: str, link: SerialLink, skill_panel: SkillPanelLocator,
         wasteland_text: RememberedDialogText, gate_dest_text: RememberedDialogText, step_forward_text: RememberedDialogText,
         reader: KoreanTextReader, screen_capture_cls, hp_detector=None) -> Optional[bool]:
@@ -1021,15 +1041,16 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             f"{'ok' if shortcut_ok else 'FAILED (missing ACK)'}"
         )
         if not shortcut_ok:
-            return False
+            print("  [recovery] F10 ACK missing -- checking the dialog before fallback")
         print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for dialog...")
         sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
-        frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-        hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+        target, converter, hp_f12 = _wait_for_step3_dialog(
+            settings, wasteland_text, link, window_title, screen_capture_cls,
+            hp_detector, hp_exit_percent,
+        )
         if hp_f12 is not None:
             return HP_RECOVERY_AFTER_F12 if hp_f12 else None
-        target = wasteland_text.find(frame)
         print(f"[2/6] '* [오렌] 버땅' region: {target}")
 
     if not teleport_scroll.present or target is None:
@@ -1045,7 +1066,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         ok = double_click_text_center(link, converter, target)
         print(f"  double-click -> {'ok' if ok else 'FAILED (missing ACK)'}")
         if not ok:
-            return False
+            print("  [recovery] travel click ACK missing -- checking for the gate")
 
     print(f"Waiting {GATE_RENDER_SETTLE_S}s for the teleport gate to render...")
     sleep_jittered(GATE_RENDER_SETTLE_S)
@@ -1057,17 +1078,17 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
         hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
         if hp_f12 is not None:
             return HP_RECOVERY_AFTER_F12 if hp_f12 else None
+        # A late dialog takes precedence even while the gate is still visible.
+        dest_target = gate_dest_text.find(frame)
+        if dest_target is not None:
+            print(f"    destination dialog already open: {dest_target}")
+            break
         gate_match = locate_teleport_gate(settings, project_root, frame)
         if gate_match is None:
             # A previous gate click may already have opened the destination
             # dialog while the gate itself disappeared behind it.  Do not
             # blindly click the upper part of the game in that state: the
             # fallback click can hit the dialog and close/select something.
-            dest_target = gate_dest_text.find(frame)
-            if dest_target is not None:
-                print(f"    destination dialog already open: {dest_target}")
-                break
-
             # Also print the best score even below threshold, for
             # calibrating match_threshold live. Treated the same
             # as "clicked but destination dialog didn't open"
@@ -1089,7 +1110,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             print("    gate and destination dialog missing: repositioning")
             clicked = click_gate_reposition(converter)
             if not clicked:
-                return False
+                print("    [recovery] reposition ACK missing -- recheck on next gate attempt")
         else:
             gate_cfg = settings["npcs"]["teleport_gate"]
             gate_template = cv2.imread(str(project_root / gate_cfg["template"]))
@@ -1134,27 +1155,28 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
                     )
                     sleep_jittered(GATE_RETRY_INTERVAL_S)
                 continue
-            if not ok:
-                return False
-
             # Always follow one acknowledged gate click with one click toward
             # the upper-center of the game field. Do this before waiting for
             # the dialog so the fallback is independent of whether the dialog
             # subsequently appears, while avoiding a click on the rendered
             # dialog itself.
-            print("    after gate click: repositioning")
-            upper_clicked = click_gate_reposition(converter)
-            if not upper_clicked:
-                return False
+            if ok:
+                print("    after gate click: repositioning")
+                upper_clicked = click_gate_reposition(converter)
+                if not upper_clicked:
+                    print("    [recovery] reposition ACK missing -- checking destination dialog")
+            else:
+                print("    [recovery] gate ACK missing -- checking destination dialog")
 
             print(f"    waiting {DIALOG_OPEN_SETTLE_S}s for the destination dialog...")
             sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
-            frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-            hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+            dest_target, converter, hp_f12 = _wait_for_step3_dialog(
+                settings, gate_dest_text, link, window_title, screen_capture_cls,
+                hp_detector, hp_exit_percent,
+            )
             if hp_f12 is not None:
                 return HP_RECOVERY_AFTER_F12 if hp_f12 else None
-            dest_target = gate_dest_text.find(frame)
             if dest_target is not None:
                 print(f"    destination dialog found: {dest_target}")
                 break
@@ -1171,17 +1193,18 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     ok = click_region_once(link, converter, dest_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
-        return False
+        print("  [recovery] destination click ACK missing -- checking confirmation dialog")
 
     print(f"Waiting {DIALOG_OPEN_SETTLE_S}s for the level-requirement/confirm dialog...")
     sleep_jittered(DIALOG_OPEN_SETTLE_S)
 
     print("[5/6] finding '발을 내딛는다' text...")
-    frame, converter = _capture_and_convert(window_title, screen_capture_cls)
-    hp_f12 = _step3_hp_is_critical(frame, hp_detector, hp_exit_percent, link)
+    forward_target, converter, hp_f12 = _wait_for_step3_dialog(
+        settings, step_forward_text, link, window_title, screen_capture_cls,
+        hp_detector, hp_exit_percent,
+    )
     if hp_f12 is not None:
         return HP_RECOVERY_AFTER_F12 if hp_f12 else None
-    forward_target = step_forward_text.find(frame)
     print(f"  target region: {forward_target}")
     if forward_target is None:
         print("[stop] '발을'+'내딛는다' text not found -- is the confirm dialog open?")
@@ -1189,7 +1212,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
     ok = click_region_once(link, converter, forward_target)
     print(f"  click -> {'ok' if ok else 'FAILED (missing ACK)'}")
     if not ok:
-        return False
+        print("  [recovery] final click ACK missing -- verifying arrival before retry")
 
     return _verify_wasteland_arrival(
         settings, project_root, window_title, link, screen_capture_cls,

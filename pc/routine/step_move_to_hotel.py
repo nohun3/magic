@@ -574,7 +574,7 @@ def _handle_event_if_present(
         print("  [event] '[기란] 잡화 상인' click failed")
         return False
 
-    event_wait_s = sleep_transition_randomized()
+    event_wait_s = sleep_transition_randomized(2.0, 3.0)
     print(f"  [event] waited {event_wait_s:.2f}s for teleport")
     npc_cfg = settings["npcs"]["event"]
     template_dir = (project_root / npc_cfg["template"]).parent

@@ -367,7 +367,7 @@ equipment:
 
 # Step 2 proceeds to Step 3 only when HP is 100% and MP reaches this level.
 step2:
-  mp_ready_percent: 95.0
+  mp_ready_percent: 93.0
   # F8 can succeed before its buff icon is rendered. Wait, then require all
   # configured checks to miss before sending the one allowed retry.
   meditation_buff_settle_seconds: 0.8
@@ -382,6 +382,8 @@ step2:
 # immediately and Step 2 is forced even if MP is already full.
 step3:
   hp_exit_percent: 40.0
+  dialog_verify_attempts: 3
+  dialog_verify_interval_seconds: 0.3
   gate_miss_click_x_ratio: 0.50
   gate_miss_click_y_ratio: 0.10
   # Random upper-screen click range around the ratios above. Defaults yield

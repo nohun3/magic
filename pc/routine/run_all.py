@@ -274,7 +274,7 @@ def _run_once() -> float:
                 print("[startup] roi_chatting click failed -- restarting session")
                 return restart_delay_s
 
-            mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 95.0))
+            mp_ready_percent = float(settings.get("step2", {}).get("mp_ready_percent", 93.0))
             print(f"=== 초기 진입: [2단계] (hotel_key 확인 -> 필요시 [1단계] -> [2단계] -> HP 100% / MP {mp_ready_percent:g}% 이상 대기) ===")
             ok = step4.ensure_step2(settings, project_root, window_title, link, skill_panel, hp_detector, mp_detector,
                                      hotel_text, rent_room_text, ok_button_text,
