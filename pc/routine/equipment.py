@@ -77,7 +77,7 @@ def ensure_equipment(settings, project_root, link, skill_panel, window_title,
     ok, hold_ms = send_random_key_tap(link, key)
     print(f"  [equipment] {current} -> {target}: {key} ({hold_ms}ms), ACK={ok}")
     if not ok:
-        return False
+        print("  [equipment] ACK missing -- verify screen without repeating the toggle")
     sleep_jittered(max(0.0, float(cfg["settle_seconds"])), jitter_seconds=0.0)
     if read_state(expected=target) != target:
         print(f"  [equipment] set {target} not confirmed")
