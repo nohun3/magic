@@ -359,7 +359,8 @@ def build_paid_wasteland_text_locator(settings: dict, project_root: Path,
 
 
 def _partial_gate_match(frame: np.ndarray, template: np.ndarray, threshold: float,
-                        min_visible_fraction: float, scan_step_px: int) -> Optional[MatchResult]:
+                        min_visible_fraction: float, scan_step_px: int,
+                        candidate_validator=None) -> Optional[MatchResult]:
     """Match the visible part of a gate clipped by a frame edge.
 
     Partial templates are compared only flush against the corresponding
@@ -382,11 +383,13 @@ def _partial_gate_match(frame: np.ndarray, template: np.ndarray, threshold: floa
         result = cv2.matchTemplate(image, needle, cv2.TM_CCOEFF_NORMED)
         _, score, _, location = cv2.minMaxLoc(result)
         if score >= threshold:
-            candidates.append(MatchResult(
+            candidate = MatchResult(
                 region=Region(left=left_offset + location[0], top=top_offset + location[1],
                               width=nw, height=nh),
                 score=float(score),
-            ))
+            )
+            if candidate_validator is None or candidate_validator(candidate):
+                candidates.append(candidate)
 
     visible_heights = list(range(min_h, min(th, fh), step))
     visible_widths = list(range(min_w, min(tw, fw), step))
@@ -428,9 +431,25 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
     if template is None:
         raise FileNotFoundError(f"Could not load gate template: {project_root / gate_cfg['template']}")
 
-    full_match = locate_template(frame, template, gate_cfg.get("match_threshold", 0.85))
-    if full_match is not None:
-        return full_match
+    def has_exposed_gate_pixels(match: MatchResult) -> bool:
+        return bool(find_gate_safe_click_points(frame, template, match.region, gate_cfg))
+
+    # A higher-scoring terrain match must not hide a usable gate candidate.
+    # Suppress rejected peaks locally, then inspect the next distinct location.
+    th, tw = template.shape[:2]
+    if frame.shape[0] >= th and frame.shape[1] >= tw:
+        scores = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+        threshold = float(gate_cfg.get("match_threshold", 0.85))
+        radius = max(1, int(gate_cfg.get("candidate_exclusion_radius_px", 30)))
+        for _ in range(max(1, int(gate_cfg.get("candidate_limit", 12)))):
+            _, score, _, (x, y) = cv2.minMaxLoc(scores)
+            if not np.isfinite(score) or score < threshold:
+                break
+            candidate = MatchResult(Region(x, y, tw, th), float(score))
+            if has_exposed_gate_pixels(candidate):
+                return candidate
+            scores[max(0, y - radius):y + radius + 1,
+                   max(0, x - radius):x + radius + 1] = -1.0
 
     return _partial_gate_match(
         frame,
@@ -438,6 +457,7 @@ def locate_teleport_gate(settings: dict, project_root: Path, frame: np.ndarray):
         float(gate_cfg.get("partial_match_threshold", 0.5)),
         float(gate_cfg.get("partial_min_visible_fraction", 0.5)),
         int(gate_cfg.get("partial_scan_step_px", 2)),
+        candidate_validator=has_exposed_gate_pixels,
     )
 
 
@@ -1099,7 +1119,7 @@ def run(settings: dict, project_root: Path, window_title: str, link: SerialLink,
             gate_cfg = settings["npcs"]["teleport_gate"]
             template = cv2.imread(str(project_root / gate_cfg["template"]))
             best = locate_template(frame, template, -1.0)
-            print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: no match >= threshold (best score below threshold: {best.score:.3f} @ {best.region})")
+            print(f"  attempt {attempt}/{GATE_CLICK_MAX_ATTEMPTS}: no validated gate candidate (raw best score: {best.score:.3f} @ {best.region})")
             failure_path = save_gate_failure_frame(
                 frame, project_root / "output" / "gate_failures", attempt, best
             )
