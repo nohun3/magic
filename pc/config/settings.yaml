@@ -250,6 +250,9 @@ npcs:
     partial_match_threshold: 0.5
     partial_min_visible_fraction: 0.5
     partial_scan_step_px: 2
+    # Reject terrain without exposed gate pixels, then inspect other peaks.
+    candidate_limit: 12
+    candidate_exclusion_radius_px: 30
     # Click only purple gate pixels that still resemble the template. Pixels
     # changed by an overlapping monster are excluded from click candidates.
     safe_click_purple_margin: 6
