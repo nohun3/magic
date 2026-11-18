@@ -518,6 +518,57 @@ def click_chat_region(link: SerialLink, settings: dict, project_root: Path,
     return ok
 
 
+def _diagnose_event_buff(settings, project_root, frame, buff_panel):
+    """Save the exact failed check and report unfiltered matching scores."""
+    try:
+        region = buff_panel.locate(frame)
+        print(
+            f"  [event diagnostic] roi_found={region is not None} "
+            f"roi_last_search_score={buff_panel.last_match_score:.6f} "
+            f"roi_threshold={settings['roi_buff']['match_threshold']} "
+            f"region={region} frame_size={frame.shape[1]}x{frame.shape[0]}"
+        )
+        crop = None
+        if region is not None:
+            crop = frame[region.top:region.top + region.height,
+                         region.left:region.left + region.width]
+            cfg = settings["buffs"]["event"]
+            template_path = project_root / cfg["template"]
+            template = cv2.imread(str(template_path))
+            if template is None:
+                print(f"  [event diagnostic] template unreadable: {template_path}")
+            else:
+                print(
+                    f"  [event diagnostic] template={template_path} "
+                    f"template_size={template.shape[1]}x{template.shape[0]} "
+                    f"roi_size={crop.shape[1]}x{crop.shape[0]}"
+                )
+                if (crop.shape[0] < template.shape[0]
+                        or crop.shape[1] < template.shape[1]):
+                    print("  [event diagnostic] buff template larger than ROI")
+                else:
+                    scores = cv2.matchTemplate(crop, template, cv2.TM_CCOEFF_NORMED)
+                    _, score, _, position = cv2.minMaxLoc(scores)
+                    print(
+                        f"  [event diagnostic] icon_best_score={score:.6f} "
+                        f"icon_threshold={cfg.get('match_threshold', 0.8)} "
+                        f"position_in_roi={position}"
+                    )
+        output_dir = project_root / "output" / "event_buff_diagnostics"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Overwrite the latest failure to keep repeated retries bounded.
+        for name, pixels in (("screen", frame), ("roi", crop)):
+            path = output_dir / f"latest_{name}.png"
+            if pixels is None:
+                path.unlink(missing_ok=True)
+            elif cv2.imwrite(str(path), pixels):
+                print(f"  [event diagnostic] saved {path}")
+            else:
+                print(f"  [event diagnostic] failed to save {path}")
+    except Exception as exc:
+        print(f"  [event diagnostic] failed: {exc}")
+
+
 def _handle_event_if_present(
     settings: dict,
     project_root: Path,
@@ -553,6 +604,7 @@ def _handle_event_if_present(
         f"  [event] buff_event not present "
         f"(score={event_buff.match_score:.3f}) -- starting event path"
     )
+    _diagnose_event_buff(settings, project_root, frame, buff_panel)
     shortcut_ok, hold_ms = send_random_key_tap(link, "F11")
     print(
         f"  [event] talking_scroll F11 ({hold_ms}ms) -> "

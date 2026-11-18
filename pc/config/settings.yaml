@@ -136,7 +136,8 @@ buffs:
     match_threshold: 0.75
   event:
     template: templates/buff_event.png
-    match_threshold: 0.85
+    # Confirmed visible in event_buff_diagnostics/latest_roi.png at 0.79145.
+    match_threshold: 0.50
   mana:
     template: templates/buff_mana.png
     match_threshold: 0.85
