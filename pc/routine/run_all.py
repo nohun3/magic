@@ -259,9 +259,11 @@ def _run_once() -> float:
     try:
         with SerialLink(resolve_port(serial_cfg["port"]), serial_cfg["baud_rate"]) as link:
             sleep_jittered(2.5)  # Leonardo boot delay after port open
-            link.send("PING")
-            sleep_jittered(0.3)
-            link.poll_acks()
+            ping_ack = link.send_and_wait("PING")
+            if ping_ack is None or not ping_ack.ok:
+                print("[startup] Arduino protocol check failed: expected ACK <id> OK; "
+                      "check the port and upload arduino/main firmware")
+                return restart_delay_s
 
             # Death dialogs are intentionally ignored. Screen capture must not
             # detect dialog_restart or click icon_restart automatically.

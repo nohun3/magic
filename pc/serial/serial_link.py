@@ -30,6 +30,7 @@ class SerialLink:
         self._ack_queue: "queue.Queue[AckResponse]" = queue.Queue()
         self._id_counter = itertools.count(1)
         self._stop_event = threading.Event()
+        self._last_unrecognized_reply = ""
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
 
@@ -84,8 +85,12 @@ class SerialLink:
         while time.perf_counter() - t0 < timeout:
             for ack in self.poll_acks():
                 if ack.command_id == cmd_id:
+                    if not ack.ok:
+                        print(f"[serial] {command_type} id={cmd_id}: ERR {ack.detail}")
                     return ack
             time.sleep(0.01)
+        print(f"[serial] {command_type} id={cmd_id}: ACK timeout after {timeout:g}s"
+              f"; last unrecognized reply={self._last_unrecognized_reply!r}")
         return None
 
     def close(self) -> None:
@@ -122,6 +127,9 @@ class SerialLink:
             ack = self._parse_ack(line)
             if ack is not None:
                 self._ack_queue.put(ack)
+            elif line:
+                self._last_unrecognized_reply = line
+                print(f"[serial] unrecognized reply: {line!r}")
 
     @staticmethod
     def _parse_ack(line: str) -> Optional[AckResponse]:
